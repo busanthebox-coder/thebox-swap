@@ -1,16 +1,23 @@
 /**
  * 더박스 대타 보드 — 구글 시트 백엔드
  *
- * 설치: 구글 시트 → 확장 프로그램 → Apps Script → 이 파일 전체를 붙여넣고 저장
+ * 설치: 대상 구글 시트 → 확장 프로그램 → Apps Script → 이 파일 전체를 붙여넣고 저장
  *       → 배포 → 새 배포 → 유형 "웹 앱"
  *       → 실행 계정: 나 / 액세스 권한: 모든 사용자 → 배포 → 승인
  *       → 나온 웹 앱 URL(.../exec)을 config.js 에 붙여넣기
  *
- * 시트(staff, swap)와 헤더는 첫 호출 때 자동으로 만들어집니다.
+ * 데이터는 "대타" 탭에, 이름 목록은 "스태프" 탭에 쌓입니다.
+ * 탭과 헤더는 첫 호출 때 자동으로 만들어집니다. 이미 내용이 있는 탭은 건드리지 않고 에러를 냅니다.
  */
 
-var SHEET_STAFF = 'staff';
-var SHEET_SWAP = 'swap';
+/* ── 어느 탭에 쓸지 ── */
+var SHEET_SWAP  = '대타';    // 대타 요청이 쌓이는 탭
+var SHEET_STAFF = '스태프';  // 이름 목록 (없으면 자동 생성)
+
+/* 시트 안에서 만든 스크립트면 비워두세요.
+   따로 만든 스크립트라면 스프레드시트 URL의 /d/ 와 /edit 사이 값을 넣습니다. */
+var SPREADSHEET_ID = '';
+
 var STAFF_COLS = ['name', 'created_at'];
 var SWAP_COLS = ['id', 'date', 'requester', 'cover', 'time_note', 'reason', 'tasks', 'status', 'created_at', 'filled_at'];
 
@@ -51,18 +58,44 @@ function json(obj) {
 }
 
 /* ───────── 시트 준비 ───────── */
-function sheetOf(name, cols) {
+function book() {
+  if (SPREADSHEET_ID) return SpreadsheetApp.openById(SPREADSHEET_ID);
   var ss = SpreadsheetApp.getActive();
+  if (!ss) throw new Error('스프레드시트를 찾지 못했습니다. SPREADSHEET_ID 를 채워주세요.');
+  return ss;
+}
+
+function writeHeader(sh, cols) {
+  sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  sh.getRange(1, 1, sh.getMaxRows(), cols.length).setNumberFormat('@'); // 날짜·ID가 숫자로 변환되지 않게
+}
+
+/**
+ * 탭을 찾아 헤더를 확인합니다.
+ * - 탭이 없으면 만들고 헤더를 씁니다
+ * - 비어 있으면 헤더를 씁니다
+ * - 이미 다른 내용이 있으면 덮어쓰지 않고 에러를 냅니다 (기존 데이터 보호)
+ */
+function sheetOf(name, cols) {
+  var ss = book();
   var sh = ss.getSheetByName(name);
-  if (!sh) {
-    sh = ss.insertSheet(name);
-    sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
-    sh.setFrozenRows(1);
-    if (name === SHEET_SWAP) sh.getRange('B:B').setNumberFormat('@'); // 날짜를 문자열로 고정
-  }
-  if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
-    sh.setFrozenRows(1);
+  if (!sh) { sh = ss.insertSheet(name); writeHeader(sh, cols); return sh; }
+  if (sh.getLastRow() === 0) { writeHeader(sh, cols); return sh; }
+
+  var width = Math.max(cols.length, sh.getLastColumn());
+  var head = sh.getRange(1, 1, 1, width).getValues()[0]
+               .map(function (v) { return String(v == null ? '' : v).trim(); });
+  var blank = head.every(function (v) { return v === ''; });
+  if (blank) { writeHeader(sh, cols); return sh; }
+
+  var okHeader = cols.every(function (c, i) { return head[i] === c; });
+  if (!okHeader) {
+    throw new Error(
+      '"' + name + '" 탭 1행이 예상과 다릅니다. 기존 데이터를 덮어쓰지 않으려고 멈췄습니다. ' +
+      '이 탭을 비우거나, Code.gs 위쪽의 SHEET_SWAP 값을 다른 탭 이름으로 바꿔주세요. ' +
+      '(필요한 1행: ' + cols.join(', ') + ')'
+    );
   }
   return sh;
 }
