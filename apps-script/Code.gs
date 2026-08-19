@@ -38,6 +38,7 @@ function handle(e) {
     switch (req.action) {
       case 'staff':    return json({ ok: true, staff: listStaff() });
       case 'addStaff': return json({ ok: true, staff: addStaff(req.name) });
+      case 'removeStaff': return json(removeStaff(req.name));
       case 'swaps':    return json({ ok: true, swaps: listSwaps(req.from, req.to) });
       case 'mine':     return json({ ok: true, swaps: listMine(req.name) });
       case 'addSwap':  return json({ ok: true, swap: addSwap(req) });
@@ -159,6 +160,31 @@ function addStaff(name) {
       have.push(name); have.sort();
     }
     return have;
+  } finally { lock.releaseLock(); }
+}
+
+/**
+ * 이름 삭제 (오타·퇴사자 정리).
+ * 스태프 목록에서만 지웁니다. 그 사람이 얽힌 대타 기록은 그대로 남습니다.
+ */
+function removeStaff(name) {
+  name = String(name || '').trim();
+  if (!name) throw new Error('이름이 비어 있습니다');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var sh = sheetOf(SHEET_STAFF, STAFF_COLS);
+    var rows = readAll(sh, STAFF_COLS);
+    var hit = 0;
+    for (var i = rows.length - 1; i >= 0; i--) {          // 아래에서 위로: 행 번호가 밀리지 않게
+      if (String(rows[i].name || '').trim() === name) { sh.deleteRow(rows[i]._row); hit++; }
+    }
+    SpreadsheetApp.flush();
+    if (!hit) return { ok: false, error: '목록에 없는 이름입니다: ' + name };
+
+    var kept = readAll(sheetOf(SHEET_SWAP, SWAP_COLS), SWAP_COLS).map(toSwap)
+      .filter(function (s) { return s.requester === name || s.cover === name; }).length;
+    return { ok: true, staff: listStaff(), kept: kept };
   } finally { lock.releaseLock(); }
 }
 

@@ -85,6 +85,16 @@
       }
       return call({ action: 'addStaff', name: name }).then(function (d) { return d.staff || []; });
     },
+    removeStaff: function (name) {
+      if (!REMOTE) {
+        var d = lsRead();
+        d.staff = d.staff.filter(function (n) { return n !== name; });
+        lsWrite(d);
+        var kept = d.swaps.filter(function (s) { return s.requester === name || s.cover === name; }).length;
+        return Promise.resolve({ ok: true, staff: d.staff.slice().sort(), kept: kept });
+      }
+      return call({ action: 'removeStaff', name: name });
+    },
     listSwaps: function (from, to) {
       if (!REMOTE) {
         return Promise.resolve(lsRead().swaps.filter(function (s) {
@@ -193,12 +203,35 @@
     }
     html += '<button class="btn btn-flat" type="button" data-who-out>다른 이름으로 로그인</button>' +
             '<p class="note">전환은 이 기기에서만 적용됩니다. 시트에 쌓인 기록은 그대로 남습니다.</p>';
+    if (others.length) {
+      html += '<details class="cleanup"><summary>이름 정리 <span class="dim">(오타·퇴사자)</span>' +
+              '<span class="chev">▾</span></summary>' +
+              '<p class="cleanup-note">로그인 목록에서만 사라집니다. 그 사람이 얽힌 대타 기록은 시트에 그대로 남습니다.</p>' +
+              '<ul class="cleanup-list">' +
+              others.map(function (n) {
+                return '<li><span>' + esc(n) + '</span>' +
+                       '<button type="button" data-del="' + esc(n) + '">삭제</button></li>';
+              }).join('') + '</ul></details>';
+    }
     el('who-body').innerHTML = html;
 
     Array.prototype.forEach.call(el('who-body').querySelectorAll('[data-who]'), function (b) {
       b.addEventListener('click', function () {
         setMe(b.dataset.who);
         toast(b.dataset.who + ' 님으로 전환했습니다');
+      });
+    });
+    Array.prototype.forEach.call(el('who-body').querySelectorAll('[data-del]'), function (b) {
+      b.addEventListener('click', function () {
+        var n = b.dataset.del;
+        if (!confirm('"' + n + '" 을(를) 이름 목록에서 지울까요?\n대타 기록은 그대로 남습니다.')) return;
+        b.disabled = true; b.textContent = '지우는 중…';
+        db.removeStaff(n).then(function (res) {
+          staff = (res && res.staff) || staff.filter(function (x) { return x !== n; });
+          var kept = res && res.kept;
+          toast(n + ' 님을 목록에서 지웠습니다' + (kept ? ' (기록 ' + kept + '건은 유지)' : ''));
+          renderWho();
+        }).catch(function (e) { b.disabled = false; b.textContent = '삭제'; showError(e); });
       });
     });
     var out = el('who-body').querySelector('[data-who-out]');
@@ -535,7 +568,12 @@
 
   function showError(e) {
     console.error(e);
-    toast('문제가 생겼습니다 — ' + (e && e.message ? e.message.slice(0, 80) : '알 수 없는 오류'));
+    var m = (e && e.message) ? e.message : '';
+    if (m.indexOf('알 수 없는 요청') !== -1) {
+      toast('시트 스크립트가 예전 버전입니다. Apps Script에서 다시 배포해 주세요.');
+      return;
+    }
+    toast('문제가 생겼습니다 — ' + (m ? m.slice(0, 80) : '알 수 없는 오류'));
   }
 
   /* 로컬 모드 안내 */
