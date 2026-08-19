@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>더박스 대타 보드</title>
+<meta name="description" content="더박스 부산 스태프 대타 보드">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2314171C'/><rect x='9' y='9' width='14' height='14' rx='3' fill='%23D3202F'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800&family=Gaegu:wght@700&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<div id="banner" class="banner" hidden></div>
+
+<!-- ── 이름 입력 ── -->
+<section id="view-login" class="login" hidden>
+  <div class="login-box">
+    <div class="brand"><span class="brand-box"><i></i></span> THE BOX · 대타 보드</div>
+    <h1>이름을 알려주세요</h1>
+    <p class="login-lede">계정 만들기 없이 이름만 쓰면 됩니다. 다음부터는 이 기기에서 바로 열립니다.</p>
+
+    <div id="known-wrap" hidden>
+      <span class="lab">이미 등록된 사람</span>
+      <div id="known-names" class="name-chips"></div>
+      <div class="or">또는</div>
+    </div>
+
+    <form id="login-form" autocomplete="off">
+      <label class="lab" for="login-name">새 이름 만들기</label>
+      <input id="login-name" class="input" type="text" placeholder="예: 심은" maxlength="12" required>
+      <p id="login-err" class="err" hidden></p>
+      <button class="btn btn-ink" type="submit">시작하기</button>
+    </form>
+  </div>
+</section>
+
+<!-- ── 앱 ── -->
+<section id="view-app" hidden>
+  <header class="topbar">
+    <div class="brand"><span class="brand-box"><i></i></span> 대타 보드</div>
+    <button id="me-btn" class="me" type="button"></button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab is-on" data-tab="cal" role="tab" type="button">달력</button>
+    <button class="tab" data-tab="mine" role="tab" type="button">내 기록</button>
+  </nav>
+
+  <!-- 달력 -->
+  <div id="tab-cal" class="tabpanel">
+    <div class="monthbar">
+      <button id="prev-m" class="icon-btn" type="button" aria-label="이전 달">‹</button>
+      <div class="monthlabel"><span id="m-num" class="num"></span><span id="m-year" class="num"></span></div>
+      <button id="next-m" class="icon-btn" type="button" aria-label="다음 달">›</button>
+      <button id="today-btn" class="ghost-sm" type="button">오늘</button>
+    </div>
+
+    <div class="dow"><span class="we">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span class="we">토</span></div>
+    <div id="cal" class="cal"></div>
+
+    <div class="legend">
+      <span><i class="lg-req"></i>아직 대타 못 구한 날</span>
+      <span>확정되면 표시가 사라집니다</span>
+    </div>
+
+    <div class="mlist">
+      <div class="mlist-h"><b id="ml-title">이달 대타</b><span id="ml-count" class="num"></span></div>
+      <div id="mlist"></div>
+    </div>
+  </div>
+
+  <!-- 내 기록 -->
+  <div id="tab-mine" class="tabpanel" hidden>
+    <div class="tally">
+      <div class="tcard a"><div class="k"><i class="pip red"></i>내가 구한 대타</div><div class="v"><span id="cnt-asked">0</span><small>회</small></div></div>
+      <div class="tcard b"><div class="k"><i class="pip green"></i>내가 나간 대타</div><div class="v"><span id="cnt-went">0</span><small>회</small></div></div>
+    </div>
+    <div class="balance"><span class="l">수지 <span class="dim">· 나간 − 구한</span></span><span id="cnt-bal" class="r">0</span></div>
+    <p class="hint" id="open-hint" hidden></p>
+    <div class="hist">
+      <div class="mlist-h"><b>내 내역</b><span id="hist-count" class="num"></span></div>
+      <div id="hist"></div>
+    </div>
+  </div>
+
+  <button id="fab" class="fab" type="button">+ 대타 요청</button>
+</section>
+
+<!-- ── 날짜 상세 ── -->
+<div id="sheet-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-date">
+    <div class="grip"></div>
+    <div class="sheet-head">
+      <div class="sheet-date"><span id="sheet-date" class="n"></span><span id="sheet-dow" class="w"></span></div>
+      <span id="sheet-badge" class="badge"></span>
+    </div>
+    <div id="sheet-body"></div>
+    <button id="sheet-add" class="addreq" type="button">+ 이 날 대타 요청하기</button>
+  </div>
+</div>
+
+<!-- ── 요청 작성 ── -->
+<div id="form-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="form-title">
+    <div class="grip"></div>
+    <h2 id="form-title" class="sheet-title">대타 요청</h2>
+    <form id="req-form" autocomplete="off">
+      <label class="lab" for="f-date">못 나오는 날</label>
+      <input id="f-date" class="input" type="date" required>
+
+      <label class="lab" for="f-time">시간 <span class="dim">(선택)</span></label>
+      <input id="f-time" class="input" type="text" placeholder="예: 12:00–21:00 / 오후만" maxlength="30">
+
+      <label class="lab" for="f-reason">사유 <span class="dim">(선택)</span></label>
+      <textarea id="f-reason" class="input" rows="2" placeholder="대타 구하는 데 도움이 되는 만큼만" maxlength="200"></textarea>
+
+      <label class="lab">대타 시 할 일 <span class="dim">(선택)</span></label>
+      <div id="task-rows" class="task-rows"></div>
+      <button id="add-task" class="ghost-sm wide" type="button">+ 할 일 추가</button>
+
+      <p id="form-err" class="err" hidden></p>
+      <div class="acts">
+        <button class="btn btn-red" type="submit">요청 올리기</button>
+        <button class="btn btn-ghost" type="button" data-close>취소</button>
+      </div>
+      <p class="note">올리면 달력에 붉게 표시되고, 누구든 “대타 갈게요”를 누르면 바로 확정됩니다.</p>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="config.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
