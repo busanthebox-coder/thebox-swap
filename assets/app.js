@@ -328,7 +328,7 @@
       '</div>';
     if (s.reason) out += '<div class="swap-body"><span class="lab2">사유</span>' + esc(s.reason) + '</div>';
     if (tasks.length) {
-      out += '<details class="todo"' + (open ? ' open' : '') + '><summary>대타 시 할 일 <span class="cnt">' + tasks.length + '</span><span class="chev">▾</span></summary><ul>' +
+      out += '<details class="todo"' + (open ? ' open' : '') + '><summary><span class="sum-t">대타 하는 원어민<span class="dim">(이름/교재 &amp; 청소 유무)</span> 변경</span><span class="cnt">' + tasks.length + '</span><span class="chev">▾</span></summary><ul>' +
         tasks.map(function (t) { return '<li><span class="cb"></span><span>' + esc(t) + '</span></li>'; }).join('') +
         '</ul></details>';
     }
@@ -386,7 +386,7 @@
   function addTaskRow(v) {
     var row = document.createElement('div');
     row.className = 'task-row';
-    row.innerHTML = '<input class="input" type="text" maxlength="60" placeholder="예: 마감 정산" value="' + esc(v || '') + '">' +
+    row.innerHTML = '<input class="input" type="text" maxlength="60" placeholder="예: Mike / 교재 3권 Unit 5 · 청소 O" value="' + esc(v || '') + '">' +
                     '<button class="del" type="button" aria-label="삭제">×</button>';
     row.querySelector('.del').addEventListener('click', function () { row.remove(); });
     el('task-rows').appendChild(row);
