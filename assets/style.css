@@ -239,4 +239,14 @@ details.todo li .cb{width:15px;height:15px;border:1.5px solid var(--rule);border
   background:var(--ink); color:#fff; font-size:13.5px; font-weight:500; padding:11px 18px;
   border-radius:22px; z-index:80; box-shadow:0 6px 20px -6px rgba(20,23,28,.6); max-width:90vw; text-align:center;
 }
+
+/* ── 로딩 (시트 응답 대기) ── */
+body.is-loading .cal{opacity:.5; transition:opacity .15s}
+body.is-loading .monthlabel::after{
+  content:""; width:11px; height:11px; margin-left:8px; display:inline-block; vertical-align:middle;
+  border:2px solid var(--rule); border-top-color:var(--ink-3); border-radius:50%;
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}

@@ -3,7 +3,8 @@
   'use strict';
 
   var CFG = window.THEBOX_CONFIG || {};
-  var REMOTE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
+  var GAS = (CFG.GAS_URL || '').trim();
+  var REMOTE = !!GAS;
   var DAYS = ['일', '월', '화', '수', '목', '금', '토'];
   var LS_ME = 'thebox.me';
   var LS_DB = 'thebox.local.v1';
@@ -39,6 +40,9 @@
     if (crypto.randomUUID) return crypto.randomUUID();
     return 'id-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
   }
+  function setLoading(on) {
+    document.body.classList.toggle('is-loading', !!on);
+  }
 
   /* ───────── data layer ───────── */
   function lsRead() {
@@ -47,38 +51,39 @@
   }
   function lsWrite(d) { localStorage.setItem(LS_DB, JSON.stringify(d)); }
 
-  function api(path, opts) {
-    opts = opts || {};
-    var h = {
-      apikey: CFG.SUPABASE_ANON_KEY,
-      Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY,
-      'Content-Type': 'application/json'
-    };
-    if (opts.prefer) h.Prefer = opts.prefer;
-    return fetch(CFG.SUPABASE_URL.replace(/\/$/, '') + '/rest/v1' + path, {
-      method: opts.method || 'GET',
-      headers: h,
-      body: opts.body ? JSON.stringify(opts.body) : undefined
+  /* 구글 Apps Script 웹앱 호출.
+     Content-Type을 text/plain으로 보내야 CORS 사전요청(preflight) 없이 통과합니다. */
+  function call(payload) {
+    return fetch(GAS, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+      redirect: 'follow'
     }).then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
-      return r.status === 204 ? [] : r.json();
+      return r.text().then(function (txt) {
+        var d;
+        try { d = JSON.parse(txt); }
+        catch (e) {
+          throw new Error('시트 응답을 읽지 못했습니다. 배포 설정에서 액세스 권한이 "모든 사용자"인지 확인해 주세요.');
+        }
+        if (!d.ok && d.error) throw new Error(d.error);
+        return d;
+      });
     });
   }
 
   var db = {
     listStaff: function () {
       if (!REMOTE) return Promise.resolve(lsRead().staff.slice().sort());
-      return api('/staff?select=name&order=name.asc').then(function (rows) {
-        return rows.map(function (r) { return r.name; });
-      });
+      return call({ action: 'staff' }).then(function (d) { return d.staff || []; });
     },
     addStaff: function (name) {
       if (!REMOTE) {
         var d = lsRead();
         if (d.staff.indexOf(name) === -1) { d.staff.push(name); lsWrite(d); }
-        return Promise.resolve();
+        return Promise.resolve(d.staff);
       }
-      return api('/staff', { method: 'POST', body: { name: name }, prefer: 'resolution=ignore-duplicates' });
+      return call({ action: 'addStaff', name: name }).then(function (d) { return d.staff || []; });
     },
     listSwaps: function (from, to) {
       if (!REMOTE) {
@@ -86,7 +91,7 @@
           return s.status !== 'canceled' && s.date >= from && s.date <= to;
         }));
       }
-      return api('/swap?select=*&status=neq.canceled&date=gte.' + from + '&date=lte.' + to + '&order=date.asc,created_at.asc');
+      return call({ action: 'swaps', from: from, to: to }).then(function (d) { return d.swaps || []; });
     },
     listMine: function (name) {
       if (!REMOTE) {
@@ -94,8 +99,7 @@
           return s.status !== 'canceled' && (s.requester === name || s.cover === name);
         }));
       }
-      var q = encodeURIComponent('requester.eq.' + name + ',cover.eq.' + name);
-      return api('/swap?select=*&status=neq.canceled&or=(' + q + ')&order=date.desc');
+      return call({ action: 'mine', name: name }).then(function (d) { return d.swaps || []; });
     },
     addSwap: function (row) {
       if (!REMOTE) {
@@ -104,25 +108,26 @@
         d.swaps.push(row); lsWrite(d);
         return Promise.resolve(row);
       }
-      return api('/swap', { method: 'POST', body: row, prefer: 'return=representation' });
+      return call({
+        action: 'addSwap', date: row.date, requester: row.requester,
+        time_note: row.time_note, reason: row.reason, tasks: row.tasks
+      });
     },
-    /* 선착순 확정: cover가 아직 비어 있을 때만 성공 */
+    /* 선착순 확정: 이미 채워졌으면 {taken:true} */
     claim: function (id, name) {
       if (!REMOTE) {
-        var d = lsRead(), hit = null;
+        var d = lsRead(), taken = false, found = false;
         d.swaps.forEach(function (s) {
-          if (s.id === id && !s.cover) {
-            s.cover = name; s.status = 'filled'; s.filled_at = new Date().toISOString(); hit = s;
+          if (s.id === id) {
+            found = true;
+            if (s.cover) { taken = true; }
+            else { s.cover = name; s.status = 'filled'; s.filled_at = new Date().toISOString(); }
           }
         });
         lsWrite(d);
-        return Promise.resolve(hit ? [hit] : []);
+        return Promise.resolve({ ok: found, taken: taken });
       }
-      return api('/swap?id=eq.' + id + '&cover=is.null', {
-        method: 'PATCH',
-        body: { cover: name, status: 'filled', filled_at: new Date().toISOString() },
-        prefer: 'return=representation'
-      });
+      return call({ action: 'claim', id: id, name: name });
     },
     unclaim: function (id, name) {
       if (!REMOTE) {
@@ -131,22 +136,18 @@
           if (s.id === id && s.cover === name) { s.cover = null; s.status = 'open'; s.filled_at = null; }
         });
         lsWrite(d);
-        return Promise.resolve([]);
+        return Promise.resolve({ ok: true });
       }
-      return api('/swap?id=eq.' + id + '&cover=eq.' + encodeURIComponent(name), {
-        method: 'PATCH', body: { cover: null, status: 'open', filled_at: null }
-      });
+      return call({ action: 'unclaim', id: id, name: name });
     },
     cancel: function (id, name) {
       if (!REMOTE) {
         var d = lsRead();
-        d.swaps.forEach(function (s) { if (s.id === id && s.requester === name) s.status = 'canceled'; });
+        d.swaps.forEach(function (s) { if (s.id === id && s.requester === me) s.status = 'canceled'; });
         lsWrite(d);
-        return Promise.resolve([]);
+        return Promise.resolve({ ok: true });
       }
-      return api('/swap?id=eq.' + id + '&requester=eq.' + encodeURIComponent(name), {
-        method: 'PATCH', body: { status: 'canceled' }
-      });
+      return call({ action: 'cancel', id: id, name: name });
     }
   };
 
@@ -204,12 +205,14 @@
 
   function loadMonth() {
     var r = monthRange(view.y, view.m);
+    setLoading(true);
     return db.listSwaps(r[0], r[1]).then(function (rows) {
+      setLoading(false);
       swaps = rows || [];
       renderCal();
       renderMonthList();
       if (sheetDate) renderSheet(sheetDate);
-    }).catch(showError);
+    }).catch(function (e) { setLoading(false); showError(e); });
   }
 
   function byDate() {
@@ -359,12 +362,12 @@
 
   function doClaim(id, btn) {
     busy = true; btn.disabled = true; btn.textContent = '확정하는 중…';
-    db.claim(id, me).then(function (rows) {
+    db.claim(id, me).then(function (res) {
       busy = false;
-      if (!rows || !rows.length) { toast('방금 다른 분이 먼저 확정했어요'); return loadMonth(); }
-      toast('확정됐습니다. 요청자에게 표시됩니다');
+      if (res && res.taken) toast('방금 ' + (res.cover || '다른 분') + ' 님이 먼저 확정했어요');
+      else toast('확정됐습니다. 요청자에게 표시됩니다');
       return loadMonth();
-    }).catch(function (e) { busy = false; showError(e); });
+    }).catch(function (e) { busy = false; showError(e); loadMonth(); });
   }
   function doAct(p, msg) {
     busy = true;
@@ -500,16 +503,20 @@
   if (!REMOTE) {
     var b = el('banner');
     b.hidden = false;
-    b.textContent = '지금은 이 기기에만 저장됩니다 — 다른 사람에게는 보이지 않아요. (Supabase 연결 전)';
+    b.textContent = '지금은 이 기기에만 저장됩니다 — 다른 사람에게는 보이지 않아요. (구글 시트 연결 전)';
   }
 
-  /* 주기 새로고침: 다른 사람이 확정한 걸 반영 */
+  /* 다른 사람이 올리거나 확정한 걸 반영 */
+  function refresh() {
+    if (!me || document.hidden || busy) return;
+    loadMonth();
+    if (!el('tab-mine').hidden) renderMine();
+  }
   if (REMOTE) {
-    setInterval(function () {
-      if (!me || document.hidden || busy) return;
-      loadMonth();
-      if (!el('tab-mine').hidden) renderMine();
-    }, 20000);
+    setInterval(refresh, 60000);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) refresh();
+    });
   }
 
   /* 부팅 */
