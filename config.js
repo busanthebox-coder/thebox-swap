@@ -12,5 +12,5 @@
    이 URL은 비밀번호가 아니라 주소일 뿐입니다. 공개돼도 계정이 털리지 않습니다.
    다만 주소를 아는 사람은 글을 쓸 수 있으니, 스태프끼리만 공유하세요. */
 window.THEBOX_CONFIG = {
-  GAS_URL: "https://script.google.com/macros/s/AKfycbzQSFpHRbQLeyzP0qFHBlqiCiEOcvbZqqF9wsQjn3e7-xzX-SIDBoreYRJ1PHoojUkY/exec"
+  GAS_URL: "https://script.google.com/macros/s/AKfycbzHqgV33sJLJUjDNtDUyBD0C5fdbqrnJvRHwQLHla179qqANgO_-ZhPnBLEAPqjS6Fc/exec"
 };

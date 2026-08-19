@@ -227,6 +227,7 @@
         if (!confirm('"' + n + '" 을(를) 이름 목록에서 지울까요?\n대타 기록은 그대로 남습니다.')) return;
         b.disabled = true; b.textContent = '지우는 중…';
         db.removeStaff(n).then(function (res) {
+          whoSeq++;                                   /* 진행 중이던 목록 조회 결과 무시 */
           staff = (res && res.staff) || staff.filter(function (x) { return x !== n; });
           var kept = res && res.kept;
           toast(n + ' 님을 목록에서 지웠습니다' + (kept ? ' (기록 ' + kept + '건은 유지)' : ''));
@@ -245,11 +246,16 @@
     });
   }
 
+  /* 계정 시트를 열 때 던진 목록 조회가 삭제보다 늦게 도착하면
+     방금 지운 이름이 되살아나 보입니다. 순번을 붙여 낡은 응답은 버립니다. */
+  var whoSeq = 0;
+
   function openWho() {
     el('who-wrap').hidden = false;
     renderWho();
-    /* 목록이 오래됐을 수 있으니 열면서 새로고침 */
+    var seq = ++whoSeq;
     db.listStaff().then(function (n) {
+      if (seq !== whoSeq) return;
       staff = n || [];
       if (!el('who-wrap').hidden) renderWho();
     }).catch(function () {});
