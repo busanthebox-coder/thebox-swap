@@ -43,7 +43,7 @@
 <section id="view-app" hidden>
   <header class="topbar">
     <div class="brand"><span class="brand-box"><i></i></span> 대타 보드</div>
-    <button id="me-btn" class="me" type="button"></button>
+    <button id="me-btn" class="me" type="button" aria-haspopup="dialog"><span class="me-n"></span><span class="me-c" aria-hidden="true">▾</span></button>
   </header>
 
   <nav class="tabs" role="tablist">
@@ -90,6 +90,16 @@
 
   <button id="fab" class="fab" type="button">+ 대타 요청</button>
 </section>
+
+<!-- ── 계정 / 이름 전환 ── -->
+<div id="who-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="who-title">
+    <div class="grip"></div>
+    <h2 id="who-title" class="sheet-title">이름 바꾸기</h2>
+    <div id="who-body"></div>
+  </div>
+</div>
 
 <!-- ── 날짜 상세 ── -->
 <div id="sheet-wrap" class="modal" hidden>

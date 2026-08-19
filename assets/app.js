@@ -173,8 +173,53 @@
     localStorage.setItem(LS_ME, name);
     el('view-login').hidden = true;
     el('view-app').hidden = false;
-    el('me-btn').textContent = name;
+    el('who-wrap').hidden = true;
+    $('.me-n', el('me-btn')).textContent = name;
     loadMonth();
+    if (!el('tab-mine').hidden) renderMine();
+  }
+
+  /* ───────── 계정 / 이름 전환 ─────────
+     한 기기를 여럿이 쓰거나, 관리자가 대신 적어줄 때 필요합니다. */
+  function renderWho() {
+    var others = staff.filter(function (n) { return n !== me; });
+    var html = '<div class="who-now"><span class="who-lab">지금 이 기기</span>' +
+               '<span class="who-name">' + esc(me) + '</span></div>';
+    if (others.length) {
+      html += '<span class="lab">다른 사람으로 전환</span><div class="name-chips">' +
+        others.map(function (n) {
+          return '<button type="button" data-who="' + esc(n) + '">' + esc(n) + '</button>';
+        }).join('') + '</div>';
+    }
+    html += '<button class="btn btn-flat" type="button" data-who-out>다른 이름으로 로그인</button>' +
+            '<p class="note">전환은 이 기기에서만 적용됩니다. 시트에 쌓인 기록은 그대로 남습니다.</p>';
+    el('who-body').innerHTML = html;
+
+    Array.prototype.forEach.call(el('who-body').querySelectorAll('[data-who]'), function (b) {
+      b.addEventListener('click', function () {
+        setMe(b.dataset.who);
+        toast(b.dataset.who + ' 님으로 전환했습니다');
+      });
+    });
+    var out = el('who-body').querySelector('[data-who-out]');
+    if (out) out.addEventListener('click', function () {
+      localStorage.removeItem(LS_ME);
+      me = null;
+      el('who-wrap').hidden = true;
+      el('login-name').value = '';
+      el('login-err').hidden = true;
+      showLogin();
+    });
+  }
+
+  function openWho() {
+    el('who-wrap').hidden = false;
+    renderWho();
+    /* 목록이 오래됐을 수 있으니 열면서 새로고침 */
+    db.listStaff().then(function (n) {
+      staff = n || [];
+      if (!el('who-wrap').hidden) renderWho();
+    }).catch(function () {});
   }
 
   el('login-form').addEventListener('submit', function (ev) {
@@ -189,13 +234,7 @@
       .catch(function (e) { err.textContent = '저장하지 못했습니다: ' + e.message; err.hidden = false; });
   });
 
-  el('me-btn').addEventListener('click', function () {
-    if (confirm('다른 이름으로 바꿀까요? (이 기기에서만 바뀝니다)')) {
-      localStorage.removeItem(LS_ME); me = null;
-      el('login-name').value = '';
-      showLogin();
-    }
-  });
+  el('me-btn').addEventListener('click', openWho);
 
   /* ───────── month load / render ───────── */
   function monthRange(y, m) {
@@ -475,11 +514,11 @@
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) {
     n.addEventListener('click', function () {
-      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; sheetDate = null;
+      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true; sheetDate = null;
     });
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; }
+    if (e.key === 'Escape') { el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true; }
   });
 
   Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
@@ -522,7 +561,7 @@
   /* 부팅 */
   var saved = localStorage.getItem(LS_ME);
   if (saved) {
-    db.listStaff().then(function (n) { staff = n; }).catch(function () {});
+    db.listStaff().then(function (n) { staff = n || []; }).catch(function () {});
     setMe(saved);
   } else {
     showLogin();
