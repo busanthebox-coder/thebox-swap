@@ -25,6 +25,10 @@
   function todayStr() { var t = new Date(); return ymd(t.getFullYear(), t.getMonth(), t.getDate()); }
   function parseYmd(s) { var p = s.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
   function dowOf(s) { return parseYmd(s).getDay(); }
+  function fmtKo(s) {
+    var p = s.split('-');
+    return (+p[1]) + '월 ' + (+p[2]) + '일(' + DAYS[dowOf(s)] + ')';
+  }
   function esc(t) {
     return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -455,12 +459,20 @@
 
   /* ───────── request form ───────── */
   function openForm(date) {
-    el('f-date').value = date || sheetDate || todayStr();
+    var d = date || sheetDate || todayStr();
+    el('f-date').value = d;
+    el('form-title').textContent = '대타 요청 · ' + fmtKo(d);
     el('f-time').value = ''; el('f-reason').value = '';
     el('task-rows').innerHTML = ''; addTaskRow();
     el('form-err').hidden = true;
     el('form-wrap').hidden = false;
   }
+
+  /* 날짜 입력이 바뀌면 제목도 따라간다 */
+  el('f-date').addEventListener('change', function () {
+    var v = el('f-date').value;
+    el('form-title').textContent = v ? '대타 요청 · ' + fmtKo(v) : '대타 요청';
+  });
   function addTaskRow(v) {
     var row = document.createElement('div');
     row.className = 'task-row';
@@ -549,7 +561,11 @@
     var t = new Date(); view.y = t.getFullYear(); view.m = t.getMonth(); loadMonth();
   });
   el('fab').addEventListener('click', function () { openForm(null); });
-  el('sheet-add').addEventListener('click', function () { closeSheet(); openForm(sheetDate); });
+  el('sheet-add').addEventListener('click', function () {
+    var d = sheetDate;          /* closeSheet()가 비우기 전에 붙잡아 둔다 */
+    closeSheet();
+    openForm(d);
+  });
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) {
     n.addEventListener('click', function () {
@@ -577,6 +593,15 @@
     var m = (e && e.message) ? e.message : '';
     if (m.indexOf('알 수 없는 요청') !== -1) {
       toast('시트 스크립트가 예전 버전입니다. Apps Script에서 다시 배포해 주세요.');
+      return;
+    }
+    /* 여러 명이 동시에 쓰면 시트 잠금이 밀린다. 데이터는 안전하니 다시 누르면 된다. */
+    if (m.indexOf('잠금') !== -1 || m.toLowerCase().indexOf('lock') !== -1 || m.indexOf('시간초과') !== -1) {
+      toast('시트가 잠깐 바빴습니다. 다시 한 번 눌러주세요.');
+      return;
+    }
+    if (m.indexOf('Failed to fetch') !== -1 || m.indexOf('NetworkError') !== -1) {
+      toast('연결이 끊겼습니다. 인터넷을 확인하고 다시 시도해 주세요.');
       return;
     }
     toast('문제가 생겼습니다 — ' + (m ? m.slice(0, 80) : '알 수 없는 오류'));
