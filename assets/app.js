@@ -169,17 +169,7 @@
   function showLogin() {
     el('view-app').hidden = true;
     el('view-login').hidden = false;
-    db.listStaff().then(function (names) {
-      staff = names;
-      if (!names.length) { el('known-wrap').hidden = true; return; }
-      el('known-wrap').hidden = false;
-      el('known-names').innerHTML = names.map(function (n) {
-        return '<button type="button" data-name="' + esc(n) + '">' + esc(n) + '</button>';
-      }).join('');
-      Array.prototype.forEach.call(el('known-names').children, function (b) {
-        b.addEventListener('click', function () { setMe(b.dataset.name); });
-      });
-    }).catch(function (e) { showError(e); });
+    el('login-name').focus();
   }
 
   function setMe(name) {
@@ -272,9 +262,19 @@
     err.hidden = true;
     if (name.length < 1) return;
     if (name.length > 12) { err.textContent = '이름은 12자까지예요.'; err.hidden = false; return; }
-    if (staff.some(function (n) { return n === name; })) { setMe(name); return; }
-    db.addStaff(name).then(function () { setMe(name); })
-      .catch(function (e) { err.textContent = '저장하지 못했습니다: ' + e.message; err.hidden = false; });
+
+    /* 같은 이름이 이미 있으면 서버가 걸러내므로 그냥 보낸다.
+       시트 왕복이 2초쯤 걸려서 버튼에 진행 상태를 보여준다. */
+    var btn = $('#login-form button[type=submit]');
+    btn.disabled = true; btn.textContent = '시작하는 중…';
+    db.addStaff(name).then(function (list) {
+      staff = list || [];
+      setMe(name);
+      btn.disabled = false; btn.textContent = '시작하기';
+    }).catch(function (e) {
+      btn.disabled = false; btn.textContent = '시작하기';
+      err.textContent = '저장하지 못했습니다: ' + e.message; err.hidden = false;
+    });
   });
 
   el('me-btn').addEventListener('click', openWho);
