@@ -623,9 +623,10 @@
       tp.recs = r[2].records || []; tp.recWeek = week;
       staff = r[3] || staff;
       tp.state = 'ok';
-      /* 일요일엔 다음 주 준비가 급하니, 다음 주 주제가 올라와 있으면 그쪽을 먼저 보여준다 */
+      /* 일요일엔 다음 주 준비가 급하다. 관리자는 다음 주를 올려야 하니 바로 다음 주로,
+         스태프는 다음 주 주제가 올라와 있을 때만 다음 주로 보여준다 */
       var next = addDays(mondayKey(new Date()), 7);
-      if (!tp.moved && new Date().getDay() === 0 && weekOf(next)) {
+      if (!tp.moved && new Date().getDay() === 0 && (weekOf(next) || isAdmin())) {
         tp.moved = true; tp.week = next;
         return loadStatus();
       }
