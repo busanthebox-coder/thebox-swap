@@ -631,7 +631,8 @@
       }
     }).catch(function (e) {
       var m = (e && e.message) || '';
-      tp.state = m.indexOf('알 수 없는 요청') !== -1 ? 'old' : m.indexOf('폴더') !== -1 ? 'nofolder' : 'error';
+      tp.state = m.indexOf('알 수 없는 요청') !== -1 ? 'old'
+               : (m.indexOf('주제 목록') !== -1 || m.indexOf('폴더') !== -1) ? 'nofolder' : 'error';
       tp.err = m;
     }).then(function () { tp.pending = null; renderTopic(); renderNudge(); });
     return tp.pending;
@@ -658,7 +659,7 @@
     var msg = {
       local: '주제 기능은 구글 시트에 연결돼 있어야 씁니다.',
       old: isAdmin() ? '시트 스크립트를 새 버전으로 다시 배포해 주세요.<br>배포 관리 → 연필 → 새 버전' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
-      nofolder: isAdmin() ? '주제 PDF 폴더 연결을 기다리는 중입니다.' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
+      nofolder: isAdmin() ? '시트의 주제목록 탭이 비어 있습니다.' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
       error: '주제를 불러오지 못했습니다.<br>' + esc((tp.err || '').slice(0, 80)),
       idle: '불러오는 중…'
     }[tp.state];

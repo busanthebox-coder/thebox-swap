@@ -45,10 +45,10 @@ function handle(e) {
       case 'claim':    return json(claim(req.id, req.name));
       case 'unclaim':  return json(unclaim(req.id, req.name));
       case 'cancel':   return json(cancel(req.id, req.name));
-      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 2, folder: !!folderId() });
+      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 3, topics: topicCount() });
 
       /* ── 주간 주제 · 숙지 퀴즈 ── */
-      case 'setFolder':  return json(setFolder(req.id));
+      case 'importTopics': return json(importTopics(req.rows));
       case 'topics':     return json({ ok: true, topics: listTopics() });
       case 'quiz':       return json({ ok: true, quiz: quizOf(req.topic) });
       case 'importQuiz': return json(importQuiz(req.rows));
@@ -314,15 +314,17 @@ function cancel(id, name) {
 
 /* ════════════════════════════════════════════════════════════
    주간 주제 · 숙지 퀴즈
-   - 주제 PDF는 드라이브 폴더에 "NN. 제목.pdf" 로 둔다
-   - 폴더 ID는 코드가 아니라 스크립트 속성(TOPIC_FOLDER_ID)에 저장한다.
-     이 코드는 공개 레포에 올라가므로 폴더 주소를 박지 않는다
+   - 주제 PDF는 공개 링크로 공유한 드라이브 폴더에 둔다
+   - 주제 번호·제목·PDF 파일 ID는 "주제목록" 탭에 둔다. 드라이브를 직접 읽지 않으므로
+     스크립트에 드라이브 권한이 필요 없다. 이 코드는 공개 레포에 올라가서 파일 주소를 박지 않는다
    - 퀴즈 문제는 "퀴즈문제" 탭. 사장님이 시트에서 직접 고칠 수 있다
+   - 새 주제를 추가하려면 "주제목록"에 한 줄(번호·제목·파일 ID), "퀴즈문제"에 문제 행을 넣는다
    ════════════════════════════════════════════════════════════ */
 
 var SHEET_WEEK  = '주간주제';
 var SHEET_QREC  = '퀴즈기록';
 var SHEET_QBANK = '퀴즈문제';
+var SHEET_TOPIC = '주제목록';
 
 var WEEK_KEYS  = ['week', 't1', 't2', 'set_by', 'set_at'];
 var WEEK_HEAD  = ['주(월요일)', '주제1 (월화토)', '주제2 (수목일)', '정한 사람', '정한 시각'];
@@ -330,20 +332,8 @@ var QREC_KEYS  = ['week', 'topic', 'name', 'first_score', 'total', 'attempts', '
 var QREC_HEAD  = ['주(월요일)', '주제', '이름', '첫 시도 점수', '문항 수', '시도 횟수', '완료', '첫 시도 시각', '완료 시각'];
 var QBANK_KEYS = ['topic', 'kind', 'q', 'a1', 'a2', 'a3', 'a4', 'answer', 'where'];
 var QBANK_HEAD = ['주제', '종류', '문제', '보기1', '보기2', '보기3', '보기4', '정답(번호)', '다시 볼 곳'];
-
-function props() { return PropertiesService.getScriptProperties(); }
-function folderId() { return props().getProperty('TOPIC_FOLDER_ID') || ''; }
-
-/** 폴더 ID는 처음 한 번만 설정된다. 바꾸려면 스크립트 속성에서 직접 지운다. */
-function setFolder(id) {
-  id = String(id || '').trim();
-  if (!id) return { ok: false, error: '폴더 ID가 비어 있습니다' };
-  if (folderId()) return { ok: false, error: '폴더가 이미 설정돼 있습니다' };
-  DriveApp.getFolderById(id).getName();            // 접근 가능한지 먼저 확인
-  props().setProperty('TOPIC_FOLDER_ID', id);
-  CacheService.getScriptCache().remove('topics');
-  return { ok: true };
-}
+var TOPIC_KEYS = ['num', 'title', 'file_id'];
+var TOPIC_HEAD = ['번호', '제목', 'PDF 파일 ID'];
 
 /** 한글 헤더로 탭을 준비하고, 기존 내용이 다르면 멈춘다 */
 function tabOf(name, head) {
@@ -368,21 +358,20 @@ function rowsOf(sh, keys) {
   });
 }
 
-/* ───────── 주제 목록 (드라이브 폴더) ───────── */
+/* ───────── 주제 목록 ("주제목록" 탭) ───────── */
+function topicCount() {
+  try { return Math.max(0, tabOf(SHEET_TOPIC, TOPIC_HEAD).getLastRow() - 1); } catch (e) { return -1; }
+}
+
 function listTopics() {
   var cache = CacheService.getScriptCache();
   var hit = cache.get('topics');
   if (hit) return JSON.parse(hit);
-  var fid = folderId();
-  if (!fid) throw new Error('주제 폴더가 아직 연결되지 않았습니다');
 
-  var out = [];
-  var it = DriveApp.getFolderById(fid).getFiles();
-  while (it.hasNext()) {
-    var f = it.next();
-    var m = /^(\d+)\.\s*(.+?)\.pdf$/i.exec(f.getName());
-    if (m) out.push({ num: +m[1], title: m[2], id: f.getId() });
-  }
+  var out = rowsOf(tabOf(SHEET_TOPIC, TOPIC_HEAD), TOPIC_KEYS).map(function (r) {
+    return { num: +r.num, title: String(r.title || '').trim(), id: String(r.file_id || '').trim() };
+  }).filter(function (t) { return t.num && t.title && t.id; });
+  if (!out.length) throw new Error('주제 목록이 아직 비어 있습니다');
   out.sort(function (a, b) { return a.num - b.num; });
 
   var have = {};
@@ -391,6 +380,22 @@ function listTopics() {
 
   cache.put('topics', JSON.stringify(out), 600);
   return out;
+}
+
+/** 주제 목록 일괄 입력 — 탭이 비어 있을 때만. 이후 추가·수정은 시트에서 직접 */
+function importTopics(rows) {
+  if (!Array.isArray(rows) || !rows.length) return { ok: false, error: '넣을 주제가 없습니다' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sh = tabOf(SHEET_TOPIC, TOPIC_HEAD);
+    if (sh.getLastRow() > 1) return { ok: false, error: '주제목록 탭에 이미 내용이 있습니다' };
+    var vals = rows.map(function (r) { return TOPIC_KEYS.map(function (k) { return r[k] == null ? '' : r[k]; }); });
+    sh.getRange(2, 1, vals.length, TOPIC_KEYS.length).setValues(vals);
+    SpreadsheetApp.flush();
+    CacheService.getScriptCache().remove('topics');
+    return { ok: true, inserted: vals.length };
+  } finally { lock.releaseLock(); }
 }
 
 /* ───────── 퀴즈 문제 ───────── */
