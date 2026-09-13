@@ -45,7 +45,17 @@ function handle(e) {
       case 'claim':    return json(claim(req.id, req.name));
       case 'unclaim':  return json(unclaim(req.id, req.name));
       case 'cancel':   return json(cancel(req.id, req.name));
-      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone() });
+      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 2, folder: !!folderId() });
+
+      /* ── 주간 주제 · 숙지 퀴즈 ── */
+      case 'setFolder':  return json(setFolder(req.id));
+      case 'topics':     return json({ ok: true, topics: listTopics() });
+      case 'quiz':       return json({ ok: true, quiz: quizOf(req.topic) });
+      case 'importQuiz': return json(importQuiz(req.rows));
+      case 'weeks':      return json({ ok: true, weeks: listWeeks() });
+      case 'setWeek':    return json({ ok: true, week: setWeek(req) });
+      case 'quizStatus': return json({ ok: true, records: quizStatus(req.week) });
+      case 'quizSubmit': return json({ ok: true, record: quizSubmit(req) });
       default:         return json({ ok: false, error: '알 수 없는 요청: ' + req.action });
     }
   } catch (err) {
@@ -300,3 +310,198 @@ function cancel(id, name) {
     return { ok: false, error: '내가 올린 요청이 아닙니다' };
   } finally { lock.releaseLock(); }
 }
+
+
+/* ════════════════════════════════════════════════════════════
+   주간 주제 · 숙지 퀴즈
+   - 주제 PDF는 드라이브 폴더에 "NN. 제목.pdf" 로 둔다
+   - 폴더 ID는 코드가 아니라 스크립트 속성(TOPIC_FOLDER_ID)에 저장한다.
+     이 코드는 공개 레포에 올라가므로 폴더 주소를 박지 않는다
+   - 퀴즈 문제는 "퀴즈문제" 탭. 사장님이 시트에서 직접 고칠 수 있다
+   ════════════════════════════════════════════════════════════ */
+
+var SHEET_WEEK  = '주간주제';
+var SHEET_QREC  = '퀴즈기록';
+var SHEET_QBANK = '퀴즈문제';
+
+var WEEK_KEYS  = ['week', 't1', 't2', 'set_by', 'set_at'];
+var WEEK_HEAD  = ['주(월요일)', '주제1 (월화토)', '주제2 (수목일)', '정한 사람', '정한 시각'];
+var QREC_KEYS  = ['week', 'topic', 'name', 'first_score', 'total', 'attempts', 'passed', 'first_at', 'passed_at'];
+var QREC_HEAD  = ['주(월요일)', '주제', '이름', '첫 시도 점수', '문항 수', '시도 횟수', '완료', '첫 시도 시각', '완료 시각'];
+var QBANK_KEYS = ['topic', 'kind', 'q', 'a1', 'a2', 'a3', 'a4', 'answer', 'where'];
+var QBANK_HEAD = ['주제', '종류', '문제', '보기1', '보기2', '보기3', '보기4', '정답(번호)', '다시 볼 곳'];
+
+function props() { return PropertiesService.getScriptProperties(); }
+function folderId() { return props().getProperty('TOPIC_FOLDER_ID') || ''; }
+
+/** 폴더 ID는 처음 한 번만 설정된다. 바꾸려면 스크립트 속성에서 직접 지운다. */
+function setFolder(id) {
+  id = String(id || '').trim();
+  if (!id) return { ok: false, error: '폴더 ID가 비어 있습니다' };
+  if (folderId()) return { ok: false, error: '폴더가 이미 설정돼 있습니다' };
+  DriveApp.getFolderById(id).getName();            // 접근 가능한지 먼저 확인
+  props().setProperty('TOPIC_FOLDER_ID', id);
+  CacheService.getScriptCache().remove('topics');
+  return { ok: true };
+}
+
+/** 한글 헤더로 탭을 준비하고, 기존 내용이 다르면 멈춘다 */
+function tabOf(name, head) {
+  var ss = book();
+  var sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); writeHeader(sh, head); return sh; }
+  if (sh.getLastRow() === 0) { writeHeader(sh, head); return sh; }
+  var got = sh.getRange(1, 1, 1, head.length).getValues()[0].map(function (v) { return String(v).trim(); });
+  if (!head.every(function (h, i) { return got[i] === h; })) {
+    throw new Error('"' + name + '" 탭 1행이 예상과 다릅니다. 기존 데이터를 지키려고 멈췄습니다.');
+  }
+  return sh;
+}
+
+function rowsOf(sh, keys) {
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, keys.length).getValues().map(function (r, i) {
+    var o = { _row: i + 2 };
+    keys.forEach(function (k, j) { o[k] = r[j]; });
+    return o;
+  });
+}
+
+/* ───────── 주제 목록 (드라이브 폴더) ───────── */
+function listTopics() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('topics');
+  if (hit) return JSON.parse(hit);
+  var fid = folderId();
+  if (!fid) throw new Error('주제 폴더가 아직 연결되지 않았습니다');
+
+  var out = [];
+  var it = DriveApp.getFolderById(fid).getFiles();
+  while (it.hasNext()) {
+    var f = it.next();
+    var m = /^(\d+)\.\s*(.+?)\.pdf$/i.exec(f.getName());
+    if (m) out.push({ num: +m[1], title: m[2], id: f.getId() });
+  }
+  out.sort(function (a, b) { return a.num - b.num; });
+
+  var have = {};
+  rowsOf(tabOf(SHEET_QBANK, QBANK_HEAD), QBANK_KEYS).forEach(function (r) { have[+r.topic] = true; });
+  out.forEach(function (t) { t.quiz = !!have[t.num]; });
+
+  cache.put('topics', JSON.stringify(out), 600);
+  return out;
+}
+
+/* ───────── 퀴즈 문제 ───────── */
+function quizOf(topic) {
+  topic = +topic;
+  var key = 'quiz_' + topic;
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+
+  var rows = rowsOf(tabOf(SHEET_QBANK, QBANK_HEAD), QBANK_KEYS).filter(function (r) { return +r.topic === topic; });
+  var quiz = { topic: topic, content: [], expr: [], pop: [] };
+  rows.forEach(function (r) {
+    var opts = [r.a1, r.a2, r.a3, r.a4].map(function (v) { return String(v == null ? '' : v).trim(); })
+                                       .filter(function (v) { return v; });
+    var q = { q: String(r.q), options: opts, answer: (+r.answer) - 1, where: String(r.where || '') };
+    if (q.answer < 0 || q.answer >= opts.length) return;           // 시트에서 잘못 고친 줄은 건너뜀
+    var k = String(r.kind);
+    if (k === '내용') quiz.content.push(q);
+    else if (k === '표현') quiz.expr.push(q);
+    else if (k === '팝퀴즈') quiz.pop.push(q);
+  });
+  cache.put(key, JSON.stringify(quiz), 600);
+  return quiz;
+}
+
+/** 퀴즈 문제 일괄 입력 — 탭이 비어 있을 때만. 덮어쓰기는 막는다 */
+function importQuiz(rows) {
+  if (!Array.isArray(rows) || !rows.length) return { ok: false, error: '넣을 문제가 없습니다' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sh = tabOf(SHEET_QBANK, QBANK_HEAD);
+    if (sh.getLastRow() > 1) return { ok: false, error: '퀴즈문제 탭에 이미 문제가 있습니다. 다시 넣으려면 탭을 비워주세요.' };
+    var vals = rows.map(function (r) { return QBANK_KEYS.map(function (k) { return r[k] == null ? '' : r[k]; }); });
+    sh.getRange(2, 1, vals.length, QBANK_KEYS.length).setValues(vals);
+    SpreadsheetApp.flush();
+    CacheService.getScriptCache().remove('topics');
+    return { ok: true, inserted: vals.length };
+  } finally { lock.releaseLock(); }
+}
+
+/* ───────── 주간 주제 ───────── */
+function listWeeks() {
+  return rowsOf(tabOf(SHEET_WEEK, WEEK_HEAD), WEEK_KEYS).map(function (r) {
+    return { week: normDate(r.week), t1: +r.t1 || null, t2: +r.t2 || null, set_by: String(r.set_by || '') };
+  }).filter(function (w) { return w.week; });
+}
+
+function setWeek(req) {
+  var week = normDate(req.week);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) throw new Error('주 날짜 형식이 잘못됐습니다');
+  var t1 = +req.t1 || '', t2 = +req.t2 || '';
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var sh = tabOf(SHEET_WEEK, WEEK_HEAD);
+    var row = [week, t1, t2, String(req.by || ''), new Date().toISOString()];
+    var hit = rowsOf(sh, WEEK_KEYS).filter(function (r) { return normDate(r.week) === week; })[0];
+    if (hit) sh.getRange(hit._row, 1, 1, row.length).setValues([row]);
+    else sh.appendRow(row);
+    SpreadsheetApp.flush();
+    return { week: week, t1: t1 || null, t2: t2 || null };
+  } finally { lock.releaseLock(); }
+}
+
+/* ───────── 퀴즈 기록 ───────── */
+function toRec(r) {
+  return {
+    week: normDate(r.week), topic: +r.topic, name: String(r.name),
+    first_score: +r.first_score, total: +r.total, attempts: +r.attempts,
+    passed: r.passed === true || String(r.passed).toUpperCase() === 'TRUE',
+    passed_at: r.passed_at ? String(r.passed_at) : null
+  };
+}
+
+function quizStatus(week) {
+  week = normDate(week);
+  return rowsOf(tabOf(SHEET_QREC, QREC_HEAD), QREC_KEYS).map(toRec)
+    .filter(function (r) { return r.week === week; });
+}
+
+/** 첫 시도 점수는 처음 한 번만 기록. 이후엔 시도 횟수와 완료 여부만 갱신 */
+function quizSubmit(req) {
+  var week = normDate(req.week), topic = +req.topic, name = String(req.name || '').trim();
+  if (!week || !topic || !name) throw new Error('주·주제·이름이 필요합니다');
+  var score = +req.score, total = +req.total, passed = !!req.passed;
+  var now = new Date().toISOString();
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var sh = tabOf(SHEET_QREC, QREC_HEAD);
+    var hit = rowsOf(sh, QREC_KEYS).filter(function (r) {
+      return normDate(r.week) === week && +r.topic === topic && String(r.name) === name;
+    })[0];
+    if (!hit) {
+      sh.appendRow([week, topic, name, score, total, 1, passed, now, passed ? now : '']);
+      return toRec({ week: week, topic: topic, name: name, first_score: score, total: total,
+                     attempts: 1, passed: passed, passed_at: passed ? now : '' });
+    }
+    var rec = toRec(hit);
+    if (rec.passed) return rec;                                    // 이미 완료면 그대로
+    var attempts = rec.attempts + 1;
+    sh.getRange(hit._row, QREC_KEYS.indexOf('attempts') + 1).setValue(attempts);
+    if (passed) {
+      sh.getRange(hit._row, QREC_KEYS.indexOf('passed') + 1).setValue(true);
+      sh.getRange(hit._row, QREC_KEYS.indexOf('passed_at') + 1).setValue(now);
+    }
+    SpreadsheetApp.flush();
+    rec.attempts = attempts; rec.passed = passed; rec.passed_at = passed ? now : null;
+    return rec;
+  } finally { lock.releaseLock(); }
+}
+

@@ -42,11 +42,13 @@
 
   <nav class="tabs" role="tablist">
     <button class="tab is-on" data-tab="cal" role="tab" type="button">달력</button>
+    <button class="tab" data-tab="topic" role="tab" type="button">주제</button>
     <button class="tab" data-tab="mine" role="tab" type="button">내 기록</button>
   </nav>
 
   <!-- 달력 -->
   <div id="tab-cal" class="tabpanel">
+    <button id="nudge" class="nudge" type="button" hidden></button>
     <div class="monthbar">
       <button id="prev-m" class="icon-btn" type="button" aria-label="이전 달">‹</button>
       <div class="monthlabel"><span id="m-num" class="num"></span><span id="m-year" class="num"></span></div>
@@ -66,6 +68,17 @@
       <div class="mlist-h"><b id="ml-title">이달 대타</b><span id="ml-count" class="num"></span></div>
       <div id="mlist"></div>
     </div>
+  </div>
+
+  <!-- 주제 -->
+  <div id="tab-topic" class="tabpanel" hidden>
+    <div class="monthbar wkbar">
+      <button id="wk-prev" class="icon-btn" type="button" aria-label="지난주">‹</button>
+      <div class="wklabel"><span id="wk-label"></span><span id="wk-tag" class="wk-tag"></span></div>
+      <button id="wk-next" class="icon-btn" type="button" aria-label="다음 주">›</button>
+    </div>
+    <div id="tp-body"></div>
+    <button id="tp-admin" class="addreq" type="button" hidden>이 주 주제 올리기</button>
   </div>
 
   <!-- 내 기록 -->
@@ -136,6 +149,49 @@
       </div>
       <p class="note">올리면 달력에 붉게 표시되고, 누구든 “대타 갈게요”를 누르면 바로 확정됩니다.</p>
     </form>
+  </div>
+</div>
+
+<!-- ── 숙지 퀴즈 ── -->
+<div id="quiz-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="qz-title">
+    <div class="grip"></div>
+    <p class="qz-kicker">숙지 퀴즈</p>
+    <h2 id="qz-title" class="sheet-title"></h2>
+    <a id="qz-pdf" class="qz-pdf" target="_blank" rel="noopener">PDF 앞뒤 다시 보기 ›</a>
+    <div id="qz-body"></div>
+    <div id="qz-foot" class="qz-foot" hidden>
+      <p id="qz-err" class="err" hidden></p>
+      <p id="qz-res" class="qz-res" hidden></p>
+      <div class="acts">
+        <button id="qz-go" class="btn btn-red" type="button">채점하기</button>
+        <button class="btn btn-ghost" type="button" data-close>닫기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 주제 올리기 (관리자) ── -->
+<div id="pick-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pk-title">
+    <div class="grip"></div>
+    <h2 id="pk-title" class="sheet-title">주제 올리기</h2>
+    <p id="pk-week" class="pk-week"></p>
+    <div class="pk-slots">
+      <button id="pk-slot0" class="pk-slot" type="button"></button>
+      <button id="pk-slot1" class="pk-slot" type="button"></button>
+    </div>
+    <input id="pk-q" class="input" type="search" placeholder="번호나 제목으로 찾기 — 31, 친구 애인" autocomplete="off">
+    <div id="pk-list" class="pk-list"></div>
+    <p id="pk-err" class="err" hidden></p>
+    <button id="pk-save" class="btn btn-ink" type="button">이 주제로 올리기</button>
+    <div id="pk-notice" class="pk-notice" hidden>
+      <span class="lab">단톡방 공지</span>
+      <textarea id="pk-text" class="input" rows="11" readonly></textarea>
+      <button id="pk-copy" class="btn btn-red" type="button">공지 복사하기</button>
+    </div>
   </div>
 </div>
 

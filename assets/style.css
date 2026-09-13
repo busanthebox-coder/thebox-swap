@@ -285,4 +285,94 @@ body.is-loading .monthlabel::after{
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 
+
+/* ── 주제 탭 ── */
+.nudge{
+  display:flex; align-items:center; gap:10px; width:100%; margin:14px 0 2px; padding:11px 14px;
+  background:var(--red-wash); border:1px solid var(--red-edge); border-radius:10px;
+  color:var(--red); font-size:13.5px; font-weight:500; text-align:left;
+}
+.nudge-go{margin-left:auto; font-weight:600; white-space:nowrap}
+.wkbar{justify-content:space-between}
+.wklabel{flex:1; display:flex; flex-direction:column; align-items:center; gap:1px}
+#wk-label{font-size:16px; font-weight:600; letter-spacing:-.02em}
+.wk-tag{font-size:11.5px; color:var(--ink-3); min-height:1em}
+.tc{
+  margin-top:12px; background:var(--card); border:1px solid var(--rule); border-radius:12px;
+  padding:15px 16px 13px; position:relative; overflow:hidden;
+}
+.tc::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--red)}
+.tc.tc-done::before{background:var(--green)}
+.tc.tc-empty::before{background:var(--rule)}
+.tc-top{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.tc-slot{font-size:12px; font-weight:600; color:var(--ink-2)}
+.tc-title{display:flex; align-items:baseline; gap:9px; margin-top:9px; font-size:18px; line-height:1.4}
+.tc-num{font-size:15px; font-weight:800; color:var(--ink-3); flex:none}
+.tc-acts{display:flex; gap:8px; margin-top:13px}
+.tc-acts .btn{flex:1; margin-top:0; padding:11px 12px; font-size:14px; text-decoration:none}
+.tc-due{margin-top:9px; font-size:12px; color:var(--ink-3)}
+.tc-none{margin-top:10px; font-size:13.5px; color:var(--ink-3)}
+.badge.warn{background:#FFF4DC; color:var(--amber); border:1px solid #F1D9A6}
+.st{margin-top:22px; border-top:1px solid var(--rule)}
+.st-t{width:100%; border-collapse:collapse; font-size:13px; min-width:0}
+.st-t th, .st-t td{padding:9px 6px; border-bottom:1px solid var(--rule-2); text-align:center; vertical-align:middle}
+.st-t thead th{font-size:11.5px; font-weight:600; color:var(--ink-3); font-family:var(--f-ui); letter-spacing:0; text-transform:none}
+.st-t thead th small, .st-t td small{display:block; font-size:10.5px; font-weight:400; color:var(--ink-3); margin-top:1px}
+.st-t tbody th{text-align:left; font-weight:500; padding-left:2px; white-space:nowrap}
+.st-t tr.me-row th{color:var(--blue)}
+.c-done{color:var(--green); font-weight:600}
+.c-try{color:var(--amber); font-weight:600}
+.c-late{color:var(--red); font-weight:600; background:var(--red-wash)}
+.c-today{color:var(--amber); font-weight:600}
+.c-wait, .c-na{color:var(--ink-3)}
+
+/* ── 퀴즈 ── */
+.qz-kicker{font-size:11.5px; font-weight:600; color:var(--red); letter-spacing:.02em}
+.qz-pdf{display:inline-block; margin-top:6px; font-size:13px; color:var(--blue); text-decoration:none; font-weight:500}
+.qz-sec{margin:22px 0 4px; font-size:12px; font-weight:600; color:var(--ink-3)}
+.qz-q{padding:12px 0 10px; border-top:1px solid var(--rule-2)}
+.qz-t{font-size:14.5px; line-height:1.6; margin-bottom:8px}
+.qz-t .num{color:var(--ink-3); font-weight:700; margin-right:2px}
+.qz-op{
+  display:block; width:100%; text-align:left; margin:5px 0; padding:10px 12px; font-size:14px; line-height:1.5;
+  background:var(--card); border:1px solid var(--rule); border-radius:9px; color:var(--ink);
+}
+.qz-op.sel{border-color:var(--blue); background:var(--blue-wash); color:var(--blue)}
+.qz-op.no{border-color:var(--red-edge); background:var(--red-wash); color:var(--red)}
+.qz-op.ok{border-color:var(--green-edge); background:var(--green-wash); color:var(--green)}
+.qz-op:disabled{cursor:default}
+.qz-q.is-done .qz-op:not(.ok){opacity:.45}
+.qz-hint{margin-top:6px; font-size:12.5px; color:var(--red); line-height:1.5}
+.qz-foot{position:sticky; bottom:calc(-24px - env(safe-area-inset-bottom)); background:var(--card);
+  padding:12px 0 4px; margin-top:8px; border-top:1px solid var(--rule)}
+.qz-foot .acts .btn{margin-top:0}
+.qz-res{margin-bottom:10px; font-size:14px; font-weight:600}
+.qz-res.is-pass{color:var(--green)} .qz-res.is-fail{color:var(--red)}
+
+/* ── 주제 올리기 ── */
+.pk-week{font-size:13px; color:var(--ink-3); margin-bottom:12px}
+.pk-slots{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px}
+.pk-slot{
+  display:flex; flex-direction:column; gap:3px; text-align:left; padding:10px 12px;
+  background:var(--card-2); border:1px solid var(--rule); border-radius:10px; color:var(--ink); min-width:0;
+}
+.pk-slot.is-on{border-color:var(--ink); box-shadow:0 0 0 1px var(--ink); background:var(--card)}
+.pk-sl{font-size:11px; font-weight:600; color:var(--ink-3)}
+.pk-sv{font-size:13.5px; font-weight:500; line-height:1.4; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical}
+.pk-list{margin-top:10px; max-height:42dvh; overflow-y:auto; border:1px solid var(--rule); border-radius:10px}
+.pk-row{
+  display:flex; align-items:center; gap:10px; width:100%; padding:10px 12px; text-align:left;
+  background:none; border:0; border-bottom:1px solid var(--rule-2); color:inherit; font-size:14px;
+}
+.pk-row:last-child{border-bottom:0}
+.pk-row.is-sel{background:var(--blue-wash)}
+.pk-n{width:24px; flex:none; font-weight:700; color:var(--ink-3); font-size:13px}
+.pk-t{flex:1; min-width:0; line-height:1.4}
+.pk-tag{flex:none; font-size:10.5px; color:var(--ink-3); background:var(--card-2); border:1px solid var(--rule); border-radius:12px; padding:1px 7px}
+.pk-tag.on{color:var(--blue); background:var(--card); border-color:var(--blue)}
+.pk-tag.warn{color:var(--amber)}
+.pk-notice{margin-top:4px}
+.pk-notice textarea{font-size:13.5px; line-height:1.6}
+.tabs .tab{white-space:nowrap}
+
 @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}

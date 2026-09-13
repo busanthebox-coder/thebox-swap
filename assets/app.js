@@ -181,6 +181,9 @@
     $('.me-n', el('me-btn')).textContent = name;
     loadMonth();
     if (!el('tab-mine').hidden) renderMine();
+    if (tp.state === 'ok') { renderTopic(); renderNudge(); } else loadTopic();
+    /* 단톡방 공지 링크(#topic)로 들어왔으면 주제 탭부터 */
+    if (location.hash === '#topic' && !setMe.hashDone) { setMe.hashDone = true; switchTab('topic'); }
   }
 
   /* ───────── 계정 / 이름 전환 ─────────
@@ -550,6 +553,432 @@
     }).catch(showError);
   }
 
+  /* ───────── 주간 주제 · 숙지 퀴즈 ─────────
+     일요일에 관리자가 다음 주 주제 두 개를 올리면, 리더·대타 가리지 않고
+     스태프 전원이 PDF 앞뒤를 읽고 9문제를 풀어 "숙지 완료"를 받는다. */
+  var ADMINS = Array.isArray(CFG.ADMINS) ? CFG.ADMINS : ['한남'];
+  var SLOTS = [
+    { key: 't1', label: '주제 1', days: '월 · 화 · 토', due: 0, dueTxt: '월요일 수업 전까지' },
+    { key: 't2', label: '주제 2', days: '수 · 목 · 일', due: 2, dueTxt: '수요일 수업 전까지' }
+  ];
+  var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], recWeek: null,
+             week: null, moved: false, quizCache: {}, pending: null };
+
+  function isAdmin() { return ADMINS.indexOf(me) !== -1; }
+  function keyOf(d) { return ymd(d.getFullYear(), d.getMonth(), d.getDate()); }
+  function mondayKey(d) {
+    var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+    return keyOf(x);
+  }
+  function addDays(key, n) { var d = parseYmd(key); d.setDate(d.getDate() + n); return keyOf(d); }
+  function md(key) { var d = parseYmd(key); return (d.getMonth() + 1) + '/' + d.getDate(); }
+  function weekLabel(key) {
+    var a = parseYmd(key), b = parseYmd(addDays(key, 6));
+    return (a.getMonth() + 1) + '월 ' + a.getDate() + '일 ~ ' +
+           (a.getMonth() === b.getMonth() ? '' : (b.getMonth() + 1) + '월 ') + b.getDate() + '일';
+  }
+  function weekTag(key) {
+    var k = mondayKey(new Date());
+    return key === k ? '이번 주' : key === addDays(k, 7) ? '다음 주' : key === addDays(k, -7) ? '지난주' : '';
+  }
+  function topicOf(n) {
+    n = +n;
+    for (var i = 0; i < tp.topics.length; i++) if (tp.topics[i].num === n) return tp.topics[i];
+    return null;
+  }
+  function weekOf(key) {
+    for (var i = 0; i < tp.weeks.length; i++) if (tp.weeks[i].week === key) return tp.weeks[i];
+    return null;
+  }
+  function recOf(name, topic) {
+    if (tp.recWeek !== tp.week) return null;
+    for (var i = 0; i < tp.recs.length; i++) {
+      var r = tp.recs[i];
+      if (r.name === name && r.topic === +topic) return r;
+    }
+    return null;
+  }
+  function pdfUrl(t) { return 'https://drive.google.com/file/d/' + encodeURIComponent(t.id) + '/view'; }
+  function dueState(slot) {
+    var due = addDays(tp.week, slot.due), today = todayStr();
+    return today > due ? 'late' : today === due ? 'today' : 'wait';
+  }
+
+  /* 주제 목록은 한 번만, 주간 주제·기록·스태프는 매번 */
+  function loadTopic() {
+    if (!REMOTE) { tp.state = 'local'; renderTopic(); return Promise.resolve(); }
+    if (!me) return Promise.resolve();
+    if (tp.pending) return tp.pending;
+    if (!tp.week) tp.week = mondayKey(new Date());
+    var week = tp.week;
+    tp.pending = Promise.all([
+      tp.topics.length ? { topics: tp.topics } : call({ action: 'topics' }),
+      call({ action: 'weeks' }),
+      call({ action: 'quizStatus', week: week }),
+      db.listStaff()
+    ]).then(function (r) {
+      tp.topics = r[0].topics || [];
+      tp.weeks = r[1].weeks || [];
+      tp.recs = r[2].records || []; tp.recWeek = week;
+      staff = r[3] || staff;
+      tp.state = 'ok';
+      /* 일요일엔 다음 주 준비가 급하니, 다음 주 주제가 올라와 있으면 그쪽을 먼저 보여준다 */
+      var next = addDays(mondayKey(new Date()), 7);
+      if (!tp.moved && new Date().getDay() === 0 && weekOf(next)) {
+        tp.moved = true; tp.week = next;
+        return loadStatus();
+      }
+    }).catch(function (e) {
+      var m = (e && e.message) || '';
+      tp.state = m.indexOf('알 수 없는 요청') !== -1 ? 'old' : m.indexOf('폴더') !== -1 ? 'nofolder' : 'error';
+      tp.err = m;
+    }).then(function () { tp.pending = null; renderTopic(); renderNudge(); });
+    return tp.pending;
+  }
+
+  function loadStatus() {
+    var week = tp.week;
+    return Promise.all([call({ action: 'weeks' }), call({ action: 'quizStatus', week: week })])
+      .then(function (r) {
+        if (week !== tp.week) return;
+        tp.weeks = r[0].weeks || [];
+        tp.recs = r[1].records || []; tp.recWeek = week;
+        renderTopic(); renderNudge();
+      }).catch(showError);
+  }
+
+  function renderTopic() {
+    var box = el('tp-body');
+    if (tp.week) {
+      el('wk-label').textContent = weekLabel(tp.week);
+      el('wk-tag').textContent = weekTag(tp.week);
+    }
+    el('tp-admin').hidden = !(isAdmin() && tp.state === 'ok');
+    var msg = {
+      local: '주제 기능은 구글 시트에 연결돼 있어야 씁니다.',
+      old: isAdmin() ? '시트 스크립트를 새 버전으로 다시 배포해 주세요.<br>배포 관리 → 연필 → 새 버전' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
+      nofolder: isAdmin() ? '주제 PDF 폴더 연결을 기다리는 중입니다.' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
+      error: '주제를 불러오지 못했습니다.<br>' + esc((tp.err || '').slice(0, 80)),
+      idle: '불러오는 중…'
+    }[tp.state];
+    if (msg) { box.innerHTML = '<p class="empty">' + msg + '</p>'; return; }
+
+    var w = weekOf(tp.week);
+    box.innerHTML = SLOTS.map(function (s) { return topicCard(s, w && w[s.key]); }).join('') + statusTable(w);
+    Array.prototype.forEach.call(box.querySelectorAll('[data-quiz]'), function (b) {
+      b.addEventListener('click', function () { openQuiz(+b.dataset.quiz); });
+    });
+  }
+
+  function myBadge(s, r) {
+    if (r && r.passed) return '<span class="badge mat">숙지 완료</span>';
+    var st = dueState(s);
+    if (st === 'late') return '<span class="badge req">마감 지남</span>';
+    if (st === 'today') return '<span class="badge warn">오늘까지</span>';
+    return '<span class="badge ok">' + (r ? '푸는 중' : '아직 안 함') + '</span>';
+  }
+
+  function topicCard(s, num) {
+    var t = num ? topicOf(num) : null;
+    var head = '<div class="tc-top"><span class="tc-slot">' + s.label + '<span class="dim"> · ' + s.days + '</span></span>';
+    if (!t) {
+      return '<article class="tc tc-empty">' + head + '</div><p class="tc-none">' +
+        (num ? num + '번 PDF를 드라이브 폴더에서 찾지 못했습니다.' : '아직 주제가 올라오지 않았어요.') + '</p></article>';
+    }
+    var r = recOf(me, t.num);
+    var done = r && r.passed;
+    var act = done ? ''
+      : t.quiz ? '<button class="btn btn-red" type="button" data-quiz="' + t.num + '">숙지 퀴즈 풀기</button>'
+               : '<button class="btn btn-flat" type="button" disabled>퀴즈 준비 중</button>';
+    var foot = done
+      ? '첫 시도 ' + r.first_score + '/' + r.total + (r.attempts > 1 ? ' · ' + r.attempts + '번 만에 완료' : ' · 한 번에 완료')
+      : s.dueTxt;
+    return '<article class="tc' + (done ? ' tc-done' : '') + '">' + head + myBadge(s, r) + '</div>' +
+      '<h3 class="tc-title"><span class="tc-num num">' + t.num + '</span>' + esc(t.title) + '</h3>' +
+      '<div class="tc-acts"><a class="btn btn-ghost" href="' + pdfUrl(t) + '" target="_blank" rel="noopener">PDF 앞뒤 보기</a>' + act + '</div>' +
+      '<p class="tc-due">' + foot + '</p></article>';
+  }
+
+  function statusTable(w) {
+    if (!w || (!w.t1 && !w.t2)) return '';
+    if (tp.recWeek !== tp.week) return '<section class="st"><p class="empty">현황을 불러오는 중…</p></section>';
+    var names = staff.slice().sort();
+    var sum = SLOTS.map(function (s) {
+      var n = w[s.key];
+      if (!n) return '';
+      var done = names.filter(function (x) { var r = recOf(x, n); return r && r.passed; }).length;
+      return s.label + ' ' + done + '/' + names.length;
+    }).filter(Boolean).join(' · ');
+    var rows = names.map(function (x) {
+      return '<tr' + (x === me ? ' class="me-row"' : '') + '><th>' + esc(x) + '</th>' + SLOTS.map(function (s) {
+        var n = w[s.key];
+        if (!n) return '<td class="c-na">—</td>';
+        var r = recOf(x, n);
+        if (r && r.passed) {
+          return '<td class="c-done">완료 <span class="num">' + r.first_score + '/' + r.total + '</span>' +
+                 (r.attempts > 1 ? '<small>재도전 ' + (r.attempts - 1) + '</small>' : '') + '</td>';
+        }
+        if (r) return '<td class="c-try">푸는 중<small>첫 시도 ' + r.first_score + '/' + r.total + '</small></td>';
+        var st = dueState(s);
+        return st === 'late' ? '<td class="c-late">안 함</td>'
+             : st === 'today' ? '<td class="c-today">오늘까지</td>'
+             : '<td class="c-wait">아직</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    return '<section class="st"><div class="mlist-h"><b>숙지 현황</b><span class="num">' + sum + '</span></div>' +
+      '<div class="tbl-scroll"><table class="st-t"><thead><tr><th></th>' +
+      SLOTS.map(function (s) {
+        var t = topicOf(w[s.key]);
+        return '<th>' + s.label + (t ? '<small>' + t.num + '번</small>' : '') + '</th>';
+      }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<p class="note">완료 옆 숫자는 첫 시도 점수입니다. 제대로 읽고 왔는지는 이 숫자가 알려줍니다.</p></section>';
+  }
+
+  /* 달력 위에 뜨는 알림: 이번 주 주제 퀴즈가 남았으면 */
+  function renderNudge() {
+    var n = el('nudge');
+    var w = tp.state === 'ok' && me ? weekOf(tp.week) : null;
+    var left = w ? SLOTS.filter(function (s) {
+      var num = w[s.key];
+      if (!num) return false;
+      var r = recOf(me, num);
+      return !(r && r.passed);
+    }) : [];
+    if (!left.length) { n.hidden = true; return; }
+    n.hidden = false;
+    n.innerHTML = '<span>' + (weekTag(tp.week) || weekLabel(tp.week)) + ' 주제 숙지 퀴즈가 ' + left.length +
+                  '개 남았어요</span><span class="nudge-go">풀러 가기 ›</span>';
+  }
+
+  /* ── 퀴즈 ── */
+  var qz = null;
+  function shuffle(a) {
+    a = a.slice();
+    for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; }
+    return a;
+  }
+  /* 내용 3 + 표현 9개 중 3 + 팝퀴즈 3. 보기 순서는 매번 섞는다 */
+  function buildItems(q) {
+    function mk(kind, x) {
+      var order = shuffle(x.options.map(function (_, i) { return i; }));
+      return { kind: kind, q: x.q, where: x.where, answer: order.indexOf(x.answer),
+               options: order.map(function (i) { return x.options[i]; }), picked: null, wrong: null, done: false };
+    }
+    return [].concat(
+      q.content.map(function (x) { return mk('뒷면 · 내용', x); }),
+      shuffle(q.expr).slice(0, 3).map(function (x) { return mk('뒷면 · 표현', x); }),
+      q.pop.map(function (x) { return mk('앞면 · 팝퀴즈', x); })
+    );
+  }
+
+  function openQuiz(num) {
+    var t = topicOf(num);
+    if (!t) return;
+    el('quiz-wrap').hidden = false;
+    el('qz-title').textContent = t.num + '. ' + t.title;
+    el('qz-pdf').href = pdfUrl(t);
+    el('qz-body').innerHTML = '<p class="empty">문제를 불러오는 중…</p>';
+    el('qz-foot').hidden = true;
+    var get = tp.quizCache[num] ? Promise.resolve(tp.quizCache[num])
+      : call({ action: 'quiz', topic: num }).then(function (d) { return (tp.quizCache[num] = d.quiz); });
+    get.then(function (q) {
+      if (!q || !(q.content.length + q.expr.length + q.pop.length)) {
+        el('qz-body').innerHTML = '<p class="empty">이 주제는 아직 퀴즈가 없습니다.</p>';
+        return;
+      }
+      qz = { topic: num, items: buildItems(q), first: null, sending: false };
+      el('qz-err').hidden = true; el('qz-res').hidden = true;
+      el('qz-go').hidden = false; el('qz-go').textContent = '채점하기';
+      renderQuiz();
+    }).catch(function (e) {
+      el('qz-body').innerHTML = '<p class="empty">문제를 불러오지 못했습니다.</p>';
+      showError(e);
+    });
+  }
+
+  function renderQuiz() {
+    var last = '', html = '';
+    qz.items.forEach(function (it, i) {
+      if (it.kind !== last) { html += '<p class="qz-sec">' + it.kind + '</p>'; last = it.kind; }
+      html += '<div class="qz-q' + (it.done ? ' is-done' : '') + '"><p class="qz-t"><span class="num">' + (i + 1) + '.</span> ' + esc(it.q) + '</p>' +
+        it.options.map(function (o, j) {
+          var c = 'qz-op';
+          if (it.done && j === it.answer) c += ' ok';
+          else if (it.picked === j) c += ' sel';
+          else if (it.wrong === j) c += ' no';
+          return '<button type="button" class="' + c + '" data-i="' + i + '" data-j="' + j + '"' + (it.done ? ' disabled' : '') + '>' + esc(o) + '</button>';
+        }).join('') +
+        (it.wrong !== null && !it.done ? '<p class="qz-hint">틀렸어요 — 다시 볼 곳: ' + esc(it.where) + '</p>' : '') +
+        '</div>';
+    });
+    el('qz-body').innerHTML = html;
+    el('qz-foot').hidden = false;
+    Array.prototype.forEach.call(el('qz-body').querySelectorAll('.qz-op'), function (b) {
+      b.addEventListener('click', function () {
+        var it = qz.items[+b.dataset.i];
+        if (it.done) return;
+        it.picked = +b.dataset.j;
+        el('qz-err').hidden = true;
+        Array.prototype.forEach.call(b.parentNode.querySelectorAll('.qz-op'), function (x) {
+          x.classList.toggle('sel', x === b);
+          x.classList.remove('no');
+        });
+      });
+    });
+  }
+
+  el('qz-go').addEventListener('click', function () {
+    if (!qz || qz.sending) return;
+    var left = qz.items.filter(function (it) { return !it.done && it.picked === null; }).length;
+    if (left) {
+      el('qz-err').textContent = '아직 안 고른 문제가 ' + left + '개 있어요';
+      el('qz-err').hidden = false;
+      return;
+    }
+    var right = 0;
+    qz.items.forEach(function (it) {
+      if (!it.done) {
+        if (it.picked === it.answer) { it.done = true; it.wrong = null; }
+        else it.wrong = it.picked;
+        it.picked = null;
+      }
+      if (it.done) right++;
+    });
+    var total = qz.items.length, passed = right === total;
+    if (qz.first === null) qz.first = right;
+    renderQuiz();
+
+    var res = el('qz-res');
+    res.hidden = false;
+    res.className = 'qz-res ' + (passed ? 'is-pass' : 'is-fail');
+    res.textContent = passed
+      ? '숙지 완료 · 첫 시도 ' + qz.first + '/' + total
+      : right + '/' + total + ' · 틀린 ' + (total - right) + '개는 PDF를 다시 보고 골라주세요';
+    el('qz-go').textContent = '다시 채점하기';
+    el('qz-go').hidden = passed;
+    if (!passed) {
+      var firstWrong = el('qz-body').querySelector('.qz-hint');
+      if (firstWrong) firstWrong.parentNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    qz.sending = true;
+    var sent = { week: tp.week, topic: qz.topic };
+    call({ action: 'quizSubmit', week: sent.week, topic: sent.topic, name: me, score: right, total: total, passed: passed })
+      .then(function (d) {
+        if (qz) qz.sending = false;
+        if (d.record && sent.week === tp.recWeek) {
+          tp.recs = tp.recs.filter(function (r) { return !(r.name === me && r.topic === sent.topic); }).concat([d.record]);
+        }
+        renderTopic(); renderNudge();
+        if (passed) toast('숙지 완료로 기록했습니다');
+      }).catch(function (e) { if (qz) qz.sending = false; showError(e); });
+  });
+
+  /* ── 주제 올리기 (관리자) ── */
+  var pk = null;
+  function openPick() {
+    var w = weekOf(tp.week);
+    pk = { week: tp.week, slot: 0, sel: [(w && w.t1) || null, (w && w.t2) || null] };
+    if (pk.sel[0] && !pk.sel[1]) pk.slot = 1;
+    el('pick-wrap').hidden = false;
+    el('pk-week').textContent = weekLabel(tp.week) + (weekTag(tp.week) ? ' · ' + weekTag(tp.week) : '');
+    el('pk-q').value = '';
+    el('pk-err').hidden = true;
+    el('pk-notice').hidden = true;
+    el('pk-save').hidden = false;
+    renderPick();
+  }
+  function lastUsed(num) {
+    var best = null;
+    tp.weeks.forEach(function (w) {
+      if (w.week !== pk.week && (w.t1 === num || w.t2 === num) && (!best || w.week > best)) best = w.week;
+    });
+    return best;
+  }
+  function renderPick() {
+    SLOTS.forEach(function (s, i) {
+      var b = el('pk-slot' + i), t = topicOf(pk.sel[i]);
+      b.classList.toggle('is-on', pk.slot === i);
+      b.innerHTML = '<span class="pk-sl">' + s.label + ' · ' + s.days + '</span>' +
+                    '<span class="pk-sv">' + (t ? t.num + '. ' + esc(t.title) : '아래에서 고르세요') + '</span>';
+    });
+    var q = el('pk-q').value.trim();
+    var list = tp.topics.filter(function (t) {
+      if (!q) return true;
+      if (/^\d+$/.test(q)) return String(t.num).indexOf(q) === 0;
+      return t.title.replace(/\s/g, '').indexOf(q.replace(/\s/g, '')) !== -1;
+    });
+    el('pk-list').innerHTML = list.map(function (t) {
+      var on = pk.sel.indexOf(t.num), used = lastUsed(t.num);
+      return '<button type="button" class="pk-row' + (on !== -1 ? ' is-sel' : '') + '" data-n="' + t.num + '">' +
+        '<span class="pk-n num">' + t.num + '</span><span class="pk-t">' + esc(t.title) + '</span>' +
+        (on !== -1 ? '<span class="pk-tag on">' + SLOTS[on].label + '</span>'
+          : used ? '<span class="pk-tag">' + md(used) + ' 주에 함</span>' : '') +
+        (t.quiz ? '' : '<span class="pk-tag warn">퀴즈 없음</span>') + '</button>';
+    }).join('') || '<p class="empty">찾는 주제가 없습니다.</p>';
+    Array.prototype.forEach.call(el('pk-list').querySelectorAll('.pk-row'), function (b) {
+      b.addEventListener('click', function () {
+        var n = +b.dataset.n, other = 1 - pk.slot;
+        if (pk.sel[other] === n) pk.sel[other] = null;          /* 같은 주제를 두 칸에 넣지 않게 */
+        pk.sel[pk.slot] = n;
+        if (!pk.sel[other]) pk.slot = other;                    /* 빈 칸으로 자동 이동 */
+        el('pk-err').hidden = true;
+        el('pk-notice').hidden = true; el('pk-save').hidden = false;
+        renderPick();
+      });
+    });
+  }
+  SLOTS.forEach(function (_, i) {
+    el('pk-slot' + i).addEventListener('click', function () { pk.slot = i; renderPick(); });
+  });
+  el('pk-q').addEventListener('input', function () { if (pk) renderPick(); });
+
+  function noticeText(week, a, b) {
+    var s = parseYmd(week), e = parseYmd(addDays(week, 6));
+    return '[더박스 주제] ' + (s.getMonth() + 1) + '/' + s.getDate() + '(월) ~ ' + (e.getMonth() + 1) + '/' + e.getDate() + '(일)\n\n' +
+      '주제 1 · 월 화 토\n' + a.num + '. ' + a.title + '\n\n' +
+      '주제 2 · 수 목 일\n' + b.num + '. ' + b.title + '\n\n' +
+      '리더·대타 모두 PDF 앞뒤를 읽고 숙지 퀴즈까지 풀어주세요.\n' +
+      '주제 1은 월요일, 주제 2는 수요일 수업 전까지입니다.\n\n' +
+      location.origin + location.pathname + '#topic';
+  }
+
+  el('pk-save').addEventListener('click', function () {
+    if (!pk.sel[0] || !pk.sel[1]) {
+      el('pk-err').textContent = (!pk.sel[0] ? '주제 1' : '주제 2') + '을 골라주세요';
+      el('pk-err').hidden = false;
+      return;
+    }
+    var btn = el('pk-save');
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1'; btn.textContent = '올리는 중…';
+    call({ action: 'setWeek', week: pk.week, t1: pk.sel[0], t2: pk.sel[1], by: me }).then(function () {
+      delete btn.dataset.busy; btn.textContent = '이 주제로 올리기';
+      tp.weeks = tp.weeks.filter(function (w) { return w.week !== pk.week; })
+                         .concat([{ week: pk.week, t1: pk.sel[0], t2: pk.sel[1], set_by: me }]);
+      btn.hidden = true;
+      el('pk-text').value = noticeText(pk.week, topicOf(pk.sel[0]), topicOf(pk.sel[1]));
+      el('pk-notice').hidden = false;
+      el('pk-notice').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      toast('올렸습니다. 이제 스태프 모두에게 보입니다');
+      renderTopic(); renderNudge();
+    }).catch(function (e) { delete btn.dataset.busy; btn.textContent = '이 주제로 올리기'; showError(e); });
+  });
+
+  el('pk-copy').addEventListener('click', function () {
+    var ta = el('pk-text'), txt = ta.value;
+    function fallback() { ta.focus(); ta.select(); toast('선택해 뒀어요. 길게 눌러 복사하세요'); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(function () { toast('복사했습니다. 단톡방에 붙여넣으세요'); }, fallback);
+    } else fallback();
+  });
+
+  el('tp-admin').addEventListener('click', openPick);
+  el('wk-prev').addEventListener('click', function () { tp.week = addDays(tp.week, -7); tp.moved = true; renderTopic(); loadStatus(); });
+  el('wk-next').addEventListener('click', function () { tp.week = addDays(tp.week, 7); tp.moved = true; renderTopic(); loadStatus(); });
+  el('nudge').addEventListener('click', function () { switchTab('topic'); });
+
   /* ───────── wiring ───────── */
   el('prev-m').addEventListener('click', function () {
     view.m--; if (view.m < 0) { view.m = 11; view.y--; } loadMonth();
@@ -569,23 +998,30 @@
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) {
     n.addEventListener('click', function () {
-      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true; sheetDate = null;
+      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
+      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; sheetDate = null; qz = null;
     });
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true; }
+    if (e.key === 'Escape') {
+      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
+      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; qz = null;
+    }
   });
 
-  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
-    t.addEventListener('click', function () {
-      Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (x) { x.classList.remove('is-on'); });
-      t.classList.add('is-on');
-      var on = t.dataset.tab;
-      el('tab-cal').hidden = on !== 'cal';
-      el('tab-mine').hidden = on !== 'mine';
-      el('fab').style.display = on === 'cal' ? '' : 'none';
-      if (on === 'mine') renderMine();
+  function switchTab(on) {
+    Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (x) {
+      x.classList.toggle('is-on', x.dataset.tab === on);
     });
+    el('tab-cal').hidden = on !== 'cal';
+    el('tab-topic').hidden = on !== 'topic';
+    el('tab-mine').hidden = on !== 'mine';
+    el('fab').style.display = on === 'cal' ? '' : 'none';
+    if (on === 'mine') renderMine();
+    if (on === 'topic') { if (tp.state === 'ok') { renderTopic(); loadStatus(); } else loadTopic(); }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
+    t.addEventListener('click', function () { switchTab(t.dataset.tab); });
   });
 
   function showError(e) {
@@ -619,6 +1055,7 @@
     if (!me || document.hidden || busy) return;
     loadMonth();
     if (!el('tab-mine').hidden) renderMine();
+    if (!el('tab-topic').hidden && tp.state === 'ok' && el('quiz-wrap').hidden) loadStatus();
   }
   if (REMOTE) {
     setInterval(refresh, 60000);
@@ -630,7 +1067,6 @@
   /* 부팅 */
   var saved = localStorage.getItem(LS_ME);
   if (saved) {
-    db.listStaff().then(function (n) { staff = n || []; }).catch(function () {});
     setMe(saved);
   } else {
     showLogin();
