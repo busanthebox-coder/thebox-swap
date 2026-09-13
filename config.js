@@ -14,5 +14,5 @@
 window.THEBOX_CONFIG = {
   /* 주간 주제를 올릴 수 있는 이름 */
   ADMINS: ["한남"],
-  GAS_URL: "https://script.google.com/macros/s/AKfycbzHqgV33sJLJUjDNtDUyBD0C5fdbqrnJvRHwQLHla179qqANgO_-ZhPnBLEAPqjS6Fc/exec"
+  GAS_URL: "https://script.google.com/macros/s/AKfycby0GH7g1yI0qAh6lIU9Aet4KNbMRSSskhDVYquZSlnFI7Ss-LUOTVGpSGV5dJqm1fZu/exec"
 };
