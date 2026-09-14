@@ -166,9 +166,42 @@
       <p id="qz-res" class="qz-res" hidden></p>
       <div class="acts">
         <button id="qz-go" class="btn btn-red" type="button">채점하기</button>
+        <button id="qz-next" class="btn btn-red" type="button" hidden>토론 준비하러 가기</button>
         <button class="btn btn-ghost" type="button" data-close>닫기</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ── 토론 준비 ── -->
+<div id="prep-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pp-title">
+    <div class="grip"></div>
+    <p class="qz-kicker">토론 준비</p>
+    <h2 id="pp-title" class="sheet-title"></h2>
+    <p class="pp-guide">메인 질문 중 <b>2개</b>를 골라, 질문마다 내 생각 · 멤버에게 던질 질문 · 꼬리 질문을 적어주세요.</p>
+    <div id="pp-chips" class="pp-chips"></div>
+    <div id="pp-body"></div>
+    <div class="qz-foot">
+      <p id="pp-err" class="err" hidden></p>
+      <div class="acts">
+        <button id="pp-go" class="btn btn-red" type="button">제출하기</button>
+        <button class="btn btn-ghost" type="button" data-close>닫기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 준비 모아보기 ── -->
+<div id="pv-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pv-title">
+    <div class="grip"></div>
+    <p class="qz-kicker">준비 모아보기</p>
+    <h2 id="pv-title" class="sheet-title"></h2>
+    <div id="pv-body"></div>
+    <div class="acts" style="margin-top:14px"><button class="btn btn-ghost" type="button" data-close>닫기</button></div>
   </div>
 </div>
 

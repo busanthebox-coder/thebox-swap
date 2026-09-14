@@ -45,7 +45,14 @@ function handle(e) {
       case 'claim':    return json(claim(req.id, req.name));
       case 'unclaim':  return json(unclaim(req.id, req.name));
       case 'cancel':   return json(cancel(req.id, req.name));
-      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 3, topics: topicCount() });
+      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 4, topics: topicCount(), questions: questionCount() });
+
+      /* ── 토론 준비 ── */
+      case 'questions':       return json({ ok: true, questions: questionsOf(req.topic) });
+      case 'importQuestions': return json(importQuestions(req.rows));
+      case 'prepSave':        return json({ ok: true, saved: prepSave(req) });
+      case 'prepStatus':      return json({ ok: true, preps: prepStatus(req.week) });
+      case 'prepView':        return json(prepView(req));
 
       /* ── 주간 주제 · 숙지 퀴즈 ── */
       case 'importTopics': return json(importTopics(req.rows));
@@ -508,5 +515,126 @@ function quizSubmit(req) {
     rec.attempts = attempts; rec.passed = passed; rec.passed_at = passed ? now : null;
     return rec;
   } finally { lock.releaseLock(); }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   토론 준비 — 퀴즈를 마친 리더가 메인 질문 2개를 골라
+   내 생각 · 멤버에게 던질 질문 · 꼬리 질문(멤버가 이렇게 말하면 ⇒ 이렇게 되묻기)을 적는다.
+   다른 리더의 준비는 내 걸 제출한 뒤에만 열린다 (관리자는 언제나).
+   ════════════════════════════════════════════════════════════ */
+
+var SHEET_QN   = '토론질문';
+var SHEET_PREP = '토론준비';
+var QN_KEYS   = ['topic', 'no', 'kr', 'en'];
+var QN_HEAD   = ['주제', '질문 번호', '질문(한국어)', '질문(영어)'];
+var PREP_KEYS = ['week', 'topic', 'name', 'no', 'thought', 'ask', 'follow', 'saved_at'];
+var PREP_HEAD = ['주(월요일)', '주제', '이름', '질문 번호', '내 생각', '멤버에게 던질 질문', '꼬리 질문', '저장 시각'];
+var PREP_NEED = 2;                 // 골라야 하는 질문 수
+var ADMIN_NAMES = ['한남'];         // 다른 리더 준비를 언제든 볼 수 있는 이름
+var ARROW = ' ⇒ ';                 // 꼬리 질문을 시트에서 읽기 쉽게: "멤버 답 ⇒ 되묻기" 한 줄씩
+
+function questionCount() {
+  try { return Math.max(0, tabOf(SHEET_QN, QN_HEAD).getLastRow() - 1); } catch (e) { return -1; }
+}
+
+function questionsOf(topic) {
+  topic = +topic;
+  return rowsOf(tabOf(SHEET_QN, QN_HEAD), QN_KEYS)
+    .filter(function (r) { return +r.topic === topic; })
+    .map(function (r) { return { no: +r.no, kr: String(r.kr), en: String(r.en || '') }; })
+    .sort(function (a, b) { return a.no - b.no; });
+}
+
+function importQuestions(rows) {
+  if (!Array.isArray(rows) || !rows.length) return { ok: false, error: '넣을 질문이 없습니다' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sh = tabOf(SHEET_QN, QN_HEAD);
+    if (sh.getLastRow() > 1) return { ok: false, error: '토론질문 탭에 이미 내용이 있습니다' };
+    var vals = rows.map(function (r) { return QN_KEYS.map(function (k) { return r[k] == null ? '' : r[k]; }); });
+    sh.getRange(2, 1, vals.length, QN_KEYS.length).setValues(vals);
+    SpreadsheetApp.flush();
+    return { ok: true, inserted: vals.length };
+  } finally { lock.releaseLock(); }
+}
+
+function clean(v, max) {
+  return String(v == null ? '' : v).replace(/⇒/g, '→').replace(/\s+/g, ' ').trim().slice(0, max || 500);
+}
+function followToText(list) {
+  return list.map(function (f) { return f.if + ARROW + f.then; }).join('\n');
+}
+function textToFollow(t) {
+  return String(t || '').split('\n').map(function (line) {
+    var i = line.indexOf(ARROW);
+    return i === -1 ? { if: '', then: line.trim() } : { if: line.slice(0, i).trim(), then: line.slice(i + ARROW.length).trim() };
+  }).filter(function (f) { return f.then; });
+}
+
+/** 한 사람의 한 주·한 주제 준비를 통째로 바꿔 넣는다 (고른 질문을 바꿔도 깔끔하게) */
+function prepSave(req) {
+  var week = normDate(req.week), topic = +req.topic, name = clean(req.name, 30);
+  if (!week || !topic || !name) throw new Error('주·주제·이름이 필요합니다');
+  var items = Array.isArray(req.items) ? req.items : [];
+  var seen = {};
+  items = items.map(function (it) {
+    var follow = (Array.isArray(it.follow) ? it.follow : [])
+      .map(function (f) { return { if: clean(f.if, 200), then: clean(f.then, 300) }; })
+      .filter(function (f) { return f.if && f.then; });
+    return { no: +it.no, thought: clean(it.thought, 600), ask: clean(it.ask, 400), follow: follow };
+  }).filter(function (it) { if (!it.no || seen[it.no]) return false; seen[it.no] = true; return true; });
+
+  if (items.length !== PREP_NEED) throw new Error('질문을 ' + PREP_NEED + '개 골라주세요');
+  items.forEach(function (it) {
+    if (it.thought.length < 5) throw new Error('Q' + it.no + ' 내 생각을 조금 더 적어주세요');
+    if (it.ask.length < 5) throw new Error('Q' + it.no + ' 멤버에게 던질 질문을 적어주세요');
+    if (!it.follow.length) throw new Error('Q' + it.no + ' 꼬리 질문을 하나 이상 적어주세요');
+  });
+
+  var now = new Date().toISOString();
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var sh = tabOf(SHEET_PREP, PREP_HEAD);
+    var old = rowsOf(sh, PREP_KEYS).filter(function (r) {
+      return normDate(r.week) === week && +r.topic === topic && String(r.name) === name;
+    });
+    for (var i = old.length - 1; i >= 0; i--) sh.deleteRow(old[i]._row);   // 아래에서 위로
+    items.forEach(function (it) {
+      sh.appendRow([week, topic, name, it.no, it.thought, it.ask, followToText(it.follow), now]);
+    });
+    SpreadsheetApp.flush();
+    return { week: week, topic: topic, name: name, count: items.length, saved_at: now };
+  } finally { lock.releaseLock(); }
+}
+
+/** 현황표용: 내용 없이 누가 몇 개 준비했는지만 */
+function prepStatus(week) {
+  week = normDate(week);
+  var map = {};
+  rowsOf(tabOf(SHEET_PREP, PREP_HEAD), PREP_KEYS).forEach(function (r) {
+    if (normDate(r.week) !== week) return;
+    var k = r.name + '|' + r.topic;
+    var m = map[k] || (map[k] = { name: String(r.name), topic: +r.topic, count: 0, saved_at: '' });
+    m.count++;
+    if (String(r.saved_at) > m.saved_at) m.saved_at = String(r.saved_at);
+  });
+  return Object.keys(map).map(function (k) { return map[k]; });
+}
+
+/** 준비 내용 보기 — 이 주에 내가 제출했거나 관리자일 때만. 같은 주제의 지난 주 준비도 함께 */
+function prepView(req) {
+  var week = normDate(req.week), topic = +req.topic, name = String(req.name || '').trim();
+  var rows = rowsOf(tabOf(SHEET_PREP, PREP_HEAD), PREP_KEYS).filter(function (r) { return +r.topic === topic; });
+  var mine = rows.filter(function (r) { return normDate(r.week) === week && String(r.name) === name; });
+  if (!mine.length && ADMIN_NAMES.indexOf(name) === -1) {
+    return { ok: false, locked: true, error: '내 준비를 먼저 제출하면 볼 수 있어요' };
+  }
+  return { ok: true, preps: rows.map(function (r) {
+    return { week: normDate(r.week), name: String(r.name), no: +r.no, thought: String(r.thought),
+             ask: String(r.ask), follow: textToFollow(r.follow), saved_at: String(r.saved_at) };
+  }) };
 }
 

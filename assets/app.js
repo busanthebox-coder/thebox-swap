@@ -558,11 +558,11 @@
      스태프 전원이 PDF 앞뒤를 읽고 9문제를 풀어 "숙지 완료"를 받는다. */
   var ADMINS = Array.isArray(CFG.ADMINS) ? CFG.ADMINS : ['한남'];
   var SLOTS = [
-    { key: 't1', label: '주제 1', days: '월 · 화 · 토', due: 0, dueTxt: '월요일 수업 전까지' },
-    { key: 't2', label: '주제 2', days: '수 · 목 · 일', due: 2, dueTxt: '수요일 수업 전까지' }
+    { key: 't1', label: '주제 1', days: '월 · 화 · 토' },
+    { key: 't2', label: '주제 2', days: '수 · 목 · 일' }
   ];
-  var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], recWeek: null,
-             week: null, moved: false, quizCache: {}, pending: null };
+  var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], preps: [], recWeek: null,
+             week: null, moved: false, quizCache: {}, qnCache: {}, pending: null };
 
   function isAdmin() { return ADMINS.indexOf(me) !== -1; }
   function keyOf(d) { return ymd(d.getFullYear(), d.getMonth(), d.getDate()); }
@@ -600,9 +600,25 @@
     return null;
   }
   function pdfUrl(t) { return 'https://drive.google.com/file/d/' + encodeURIComponent(t.id) + '/view'; }
-  function dueState(slot) {
-    var due = addDays(tp.week, slot.due), today = todayStr();
-    return today > due ? 'late' : today === due ? 'today' : 'wait';
+  function prepOf(name, topic) {
+    if (tp.recWeek !== tp.week) return null;
+    for (var i = 0; i < tp.preps.length; i++) {
+      var p = tp.preps[i];
+      if (p.name === name && p.topic === +topic) return p;
+    }
+    return null;
+  }
+  /* 퀴즈 통과 + 준비 2개 = 완료 */
+  function progress(name, topic) {
+    var r = recOf(name, topic), p = prepOf(name, topic);
+    var quiz = !!(r && r.passed), prep = !!(p && p.count >= 2);
+    return { rec: r, prep: p, quiz: quiz, prepDone: prep, done: quiz && prep };
+  }
+  function fmtWhen(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    return (d.getMonth() + 1) + '/' + d.getDate() + '(' + DAYS[d.getDay()] + ') ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
   /* 주제 목록은 한 번만, 주간 주제·기록·스태프는 매번 */
@@ -616,12 +632,14 @@
       tp.topics.length ? { topics: tp.topics } : call({ action: 'topics' }),
       call({ action: 'weeks' }),
       call({ action: 'quizStatus', week: week }),
-      db.listStaff()
+      db.listStaff(),
+      call({ action: 'prepStatus', week: week })
     ]).then(function (r) {
       tp.topics = r[0].topics || [];
       tp.weeks = r[1].weeks || [];
       tp.recs = r[2].records || []; tp.recWeek = week;
       staff = r[3] || staff;
+      tp.preps = r[4].preps || [];
       tp.state = 'ok';
       /* 일요일엔 다음 주 준비가 급하다. 관리자는 다음 주를 올려야 하니 바로 다음 주로,
          스태프는 다음 주 주제가 올라와 있을 때만 다음 주로 보여준다 */
@@ -641,11 +659,13 @@
 
   function loadStatus() {
     var week = tp.week;
-    return Promise.all([call({ action: 'weeks' }), call({ action: 'quizStatus', week: week })])
+    return Promise.all([call({ action: 'weeks' }), call({ action: 'quizStatus', week: week }),
+                        call({ action: 'prepStatus', week: week })])
       .then(function (r) {
         if (week !== tp.week) return;
         tp.weeks = r[0].weeks || [];
         tp.recs = r[1].records || []; tp.recWeek = week;
+        tp.preps = r[2].preps || [];
         renderTopic(); renderNudge();
       }).catch(showError);
   }
@@ -671,14 +691,18 @@
     Array.prototype.forEach.call(box.querySelectorAll('[data-quiz]'), function (b) {
       b.addEventListener('click', function () { openQuiz(+b.dataset.quiz); });
     });
+    Array.prototype.forEach.call(box.querySelectorAll('[data-prep]'), function (b) {
+      b.addEventListener('click', function () { openPrep(+b.dataset.prep); });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('[data-view]'), function (b) {
+      b.addEventListener('click', function () { openView(+b.dataset.view); });
+    });
   }
 
-  function myBadge(s, r) {
-    if (r && r.passed) return '<span class="badge mat">숙지 완료</span>';
-    var st = dueState(s);
-    if (st === 'late') return '<span class="badge req">마감 지남</span>';
-    if (st === 'today') return '<span class="badge warn">오늘까지</span>';
-    return '<span class="badge ok">' + (r ? '푸는 중' : '아직 안 함') + '</span>';
+  function myBadge(g) {
+    if (g.done) return '<span class="badge mat">준비 완료</span>';
+    if (g.quiz) return '<span class="badge warn">토론 준비 남음</span>';
+    return '<span class="badge ok">' + (g.rec ? '퀴즈 푸는 중' : '아직 안 함') + '</span>';
   }
 
   function topicCard(s, num) {
@@ -686,20 +710,27 @@
     var head = '<div class="tc-top"><span class="tc-slot">' + s.label + '<span class="dim"> · ' + s.days + '</span></span>';
     if (!t) {
       return '<article class="tc tc-empty">' + head + '</div><p class="tc-none">' +
-        (num ? num + '번 PDF를 드라이브 폴더에서 찾지 못했습니다.' : '아직 주제가 올라오지 않았어요.') + '</p></article>';
+        (num ? num + '번 PDF를 찾지 못했습니다.' : '아직 주제가 올라오지 않았어요.') + '</p></article>';
     }
-    var r = recOf(me, t.num);
-    var done = r && r.passed;
-    var act = done ? ''
-      : t.quiz ? '<button class="btn btn-red" type="button" data-quiz="' + t.num + '">숙지 퀴즈 풀기</button>'
-               : '<button class="btn btn-flat" type="button" disabled>퀴즈 준비 중</button>';
-    var foot = done
-      ? '첫 시도 ' + r.first_score + '/' + r.total + (r.attempts > 1 ? ' · ' + r.attempts + '번 만에 완료' : ' · 한 번에 완료')
-      : s.dueTxt;
-    return '<article class="tc' + (done ? ' tc-done' : '') + '">' + head + myBadge(s, r) + '</div>' +
+    var g = progress(me, t.num), r = g.rec;
+    var act, foot;
+    if (!g.quiz) {
+      act = t.quiz ? '<button class="btn btn-red" type="button" data-quiz="' + t.num + '">숙지 퀴즈 풀기</button>'
+                   : '<button class="btn btn-flat" type="button" disabled>퀴즈 준비 중</button>';
+      foot = '① 숙지 퀴즈 → ② 토론 준비 · 맡은 날 수업 전까지';
+    } else if (!g.prepDone) {
+      act = '<button class="btn btn-red" type="button" data-prep="' + t.num + '">토론 준비하기</button>';
+      foot = '퀴즈 ✓ 첫 시도 ' + r.first_score + '/' + r.total + ' · 이제 토론 준비가 남았어요';
+    } else {
+      act = '<button class="btn btn-flat" type="button" data-prep="' + t.num + '">내 준비 · 수정</button>';
+      foot = '퀴즈 ✓ 첫 시도 ' + r.first_score + '/' + r.total + ' · 준비 ✓ ' + fmtWhen(g.prep.saved_at);
+    }
+    var view = (g.prepDone || isAdmin())
+      ? '<button class="tc-link" type="button" data-view="' + t.num + '">다른 리더들의 준비 보기 ›</button>' : '';
+    return '<article class="tc' + (g.done ? ' tc-done' : '') + '">' + head + myBadge(g) + '</div>' +
       '<h3 class="tc-title"><span class="tc-num num">' + t.num + '</span>' + esc(t.title) + '</h3>' +
       '<div class="tc-acts"><a class="btn btn-ghost" href="' + pdfUrl(t) + '" target="_blank" rel="noopener">PDF 앞뒤 보기</a>' + act + '</div>' +
-      '<p class="tc-due">' + foot + '</p></article>';
+      '<p class="tc-due">' + foot + '</p>' + view + '</article>';
   }
 
   function statusTable(w) {
@@ -709,48 +740,48 @@
     var sum = SLOTS.map(function (s) {
       var n = w[s.key];
       if (!n) return '';
-      var done = names.filter(function (x) { var r = recOf(x, n); return r && r.passed; }).length;
+      var done = names.filter(function (x) { return progress(x, n).done; }).length;
       return s.label + ' ' + done + '/' + names.length;
     }).filter(Boolean).join(' · ');
     var rows = names.map(function (x) {
       return '<tr' + (x === me ? ' class="me-row"' : '') + '><th>' + esc(x) + '</th>' + SLOTS.map(function (s) {
         var n = w[s.key];
         if (!n) return '<td class="c-na">—</td>';
-        var r = recOf(x, n);
-        if (r && r.passed) {
+        var g = progress(x, n), r = g.rec;
+        if (g.done) {
           return '<td class="c-done">완료 <span class="num">' + r.first_score + '/' + r.total + '</span>' +
-                 (r.attempts > 1 ? '<small>재도전 ' + (r.attempts - 1) + '</small>' : '') + '</td>';
+                 '<small>' + fmtWhen(g.prep.saved_at) + '</small></td>';
         }
-        if (r) return '<td class="c-try">푸는 중<small>첫 시도 ' + r.first_score + '/' + r.total + '</small></td>';
-        var st = dueState(s);
-        return st === 'late' ? '<td class="c-late">안 함</td>'
-             : st === 'today' ? '<td class="c-today">오늘까지</td>'
-             : '<td class="c-wait">아직</td>';
+        if (g.quiz) return '<td class="c-try">퀴즈만 <span class="num">' + r.first_score + '/' + r.total + '</span><small>' + fmtWhen(r.passed_at) + '</small></td>';
+        if (r) return '<td class="c-try">퀴즈 푸는 중</td>';
+        return '<td class="c-wait">아직</td>';
       }).join('') + '</tr>';
     }).join('');
-    return '<section class="st"><div class="mlist-h"><b>숙지 현황</b><span class="num">' + sum + '</span></div>' +
+    return '<section class="st"><div class="mlist-h"><b>숙지 · 준비 현황</b><span class="num">' + sum + '</span></div>' +
       '<div class="tbl-scroll"><table class="st-t"><thead><tr><th></th>' +
       SLOTS.map(function (s) {
         var t = topicOf(w[s.key]);
         return '<th>' + s.label + (t ? '<small>' + t.num + '번</small>' : '') + '</th>';
       }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<p class="note">완료 옆 숫자는 첫 시도 점수입니다. 제대로 읽고 왔는지는 이 숫자가 알려줍니다.</p></section>';
+      '<p class="note">완료 = 퀴즈 + 토론 준비. 숫자는 퀴즈 첫 시도 점수, 아래는 끝낸 시각입니다.</p></section>';
   }
 
-  /* 달력 위에 뜨는 알림: 이번 주 주제 퀴즈가 남았으면 */
+  /* 달력 위에 뜨는 알림: 이번 주 주제에서 남은 단계가 있으면 */
   function renderNudge() {
     var n = el('nudge');
     var w = tp.state === 'ok' && me ? weekOf(tp.week) : null;
-    var left = w ? SLOTS.filter(function (s) {
+    var left = 0;
+    if (w) SLOTS.forEach(function (s) {
       var num = w[s.key];
-      if (!num) return false;
-      var r = recOf(me, num);
-      return !(r && r.passed);
-    }) : [];
-    if (!left.length) { n.hidden = true; return; }
+      if (!num) return;
+      var g = progress(me, num);
+      if (!g.quiz) left++;
+      if (!g.prepDone) left++;
+    });
+    if (!left) { n.hidden = true; return; }
     n.hidden = false;
-    n.innerHTML = '<span>' + (weekTag(tp.week) || weekLabel(tp.week)) + ' 주제 숙지 퀴즈가 ' + left.length +
-                  '개 남았어요</span><span class="nudge-go">풀러 가기 ›</span>';
+    n.innerHTML = '<span>' + (weekTag(tp.week) || weekLabel(tp.week)) + ' 주제 · 퀴즈와 토론 준비 ' + left +
+                  '개 남았어요</span><span class="nudge-go">하러 가기 ›</span>';
   }
 
   /* ── 퀴즈 ── */
@@ -791,7 +822,7 @@
       }
       qz = { topic: num, items: buildItems(q), first: null, sending: false };
       el('qz-err').hidden = true; el('qz-res').hidden = true;
-      el('qz-go').hidden = false; el('qz-go').textContent = '채점하기';
+      el('qz-go').hidden = false; el('qz-go').textContent = '채점하기'; el('qz-next').hidden = true;
       renderQuiz();
     }).catch(function (e) {
       el('qz-body').innerHTML = '<p class="empty">문제를 불러오지 못했습니다.</p>';
@@ -859,6 +890,7 @@
       : right + '/' + total + ' · 틀린 ' + (total - right) + '개는 PDF를 다시 보고 골라주세요';
     el('qz-go').textContent = '다시 채점하기';
     el('qz-go').hidden = passed;
+    el('qz-next').hidden = !passed;
     if (!passed) {
       var firstWrong = el('qz-body').querySelector('.qz-hint');
       if (firstWrong) firstWrong.parentNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -876,6 +908,189 @@
         if (passed) toast('숙지 완료로 기록했습니다');
       }).catch(function (e) { if (qz) qz.sending = false; showError(e); });
   });
+
+  /* ── 토론 준비 ──
+     질문 목록을 먼저 보여주고, 고른 질문만 펼쳐 세 칸을 적게 한다.
+     닫았다 열어도 쓰던 내용이 남도록 이 기기에 초안을 저장한다. */
+  var pp = null;
+  function draftKey(topic) { return 'thebox.prep.' + tp.week + '.' + topic + '.' + me; }
+  function blankPrep() { return { thought: '', ask: '', follow: [{ if: '', then: '' }] }; }
+  function loadQuestions(topic) {
+    return tp.qnCache[topic] ? Promise.resolve(tp.qnCache[topic])
+      : call({ action: 'questions', topic: topic }).then(function (d) { return (tp.qnCache[topic] = d.questions || []); });
+  }
+  function saveDraft() {
+    try { localStorage.setItem(draftKey(pp.topic), JSON.stringify({ sel: pp.sel, data: pp.data })); } catch (e) {}
+  }
+
+  function openPrep(num) {
+    var t = topicOf(num);
+    if (!t) return;
+    el('quiz-wrap').hidden = true; qz = null;
+    el('prep-wrap').hidden = false;
+    el('pp-title').textContent = t.num + '. ' + t.title;
+    el('pp-chips').innerHTML = '';
+    el('pp-body').innerHTML = '<p class="empty">질문을 불러오는 중…</p>';
+    el('pp-err').hidden = true;
+    pp = null;
+    var mine = progress(me, num).prepDone;
+    Promise.all([loadQuestions(num), mine ? call({ action: 'prepView', week: tp.week, topic: num, name: me }) : null])
+      .then(function (r) {
+        var qs = r[0];
+        if (!qs.length) { el('pp-body').innerHTML = '<p class="empty">이 주제는 아직 토론 질문이 없습니다.</p>'; return; }
+        pp = { topic: num, qs: qs, sel: [], data: {} };
+        var saved = (r[1] && r[1].preps || []).filter(function (x) { return x.week === tp.week && x.name === me; });
+        if (saved.length) {
+          saved.forEach(function (x) {
+            pp.sel.push(x.no);
+            pp.data[x.no] = { thought: x.thought, ask: x.ask, follow: x.follow.length ? x.follow : [{ if: '', then: '' }] };
+          });
+        } else {
+          try {
+            var d = JSON.parse(localStorage.getItem(draftKey(num)) || 'null');
+            if (d && Array.isArray(d.sel)) { pp.sel = d.sel.slice(0, 2); pp.data = d.data || {}; }
+          } catch (e) {}
+        }
+        el('pp-go').textContent = saved.length ? '수정해서 다시 제출' : '제출하기';
+        renderPrep();
+      }).catch(function (e) {
+        el('pp-body').innerHTML = '<p class="empty">질문을 불러오지 못했습니다.</p>';
+        showError(e);
+      });
+  }
+
+  function renderPrep() {
+    el('pp-chips').innerHTML = '<span class="pp-count">고른 질문 <b>' + pp.sel.length + '</b> / 2</span>';
+    el('pp-body').innerHTML = pp.qs.map(function (q) {
+      var on = pp.sel.indexOf(q.no) !== -1;
+      var d = pp.data[q.no] || blankPrep();
+      var h = '<section class="pq' + (on ? ' is-on' : '') + '" data-no="' + q.no + '">' +
+        '<button type="button" class="pq-head" data-pick="' + q.no + '">' +
+        '<span class="pq-no num">Q' + q.no + '</span>' +
+        '<span class="pq-t">' + esc(q.kr) + (q.en ? '<small>' + esc(q.en) + '</small>' : '') + '</span>' +
+        '<span class="pq-tog">' + (on ? '고름 ✓' : '고르기') + '</span></button>';
+      if (on) {
+        h += '<div class="pq-form">' +
+          '<label class="lab long">내 생각</label>' +
+          '<textarea class="input" rows="2" data-f="thought" placeholder="이 질문에 대한 내 답을 한두 줄로">' + esc(d.thought) + '</textarea>' +
+          '<label class="lab long">멤버에게 던질 질문</label>' +
+          '<textarea class="input" rows="2" data-f="ask" placeholder="멤버가 편하게 말을 꺼낼 수 있는 질문">' + esc(d.ask) + '</textarea>' +
+          '<label class="lab long">꼬리 질문 <span class="dim">— 멤버가 이렇게 말하면 → 이렇게 되묻기</span></label>' +
+          d.follow.map(function (f, i) {
+            return '<div class="fl-row">' +
+              '<input class="input" data-fi="' + i + '" data-k="if" placeholder="멤버 답: 말할 거예요" value="' + esc(f.if) + '">' +
+              '<span class="fl-arrow">→</span>' +
+              '<input class="input" data-fi="' + i + '" data-k="then" placeholder="되묻기: 친구가 서운해하면요?" value="' + esc(f.then) + '">' +
+              (d.follow.length > 1 ? '<button type="button" class="del" data-fdel="' + i + '" aria-label="꼬리 질문 빼기">×</button>' : '') +
+              '</div>';
+          }).join('') +
+          '<button type="button" class="ghost-sm wide" data-fadd="1">+ 꼬리 질문 추가</button></div>';
+      }
+      return h + '</section>';
+    }).join('');
+
+    var body = el('pp-body');
+    function noOf(node) { return +node.closest('.pq').dataset.no; }
+    Array.prototype.forEach.call(body.querySelectorAll('[data-pick]'), function (b) {
+      b.addEventListener('click', function () {
+        var no = +b.dataset.pick, at = pp.sel.indexOf(no);
+        el('pp-err').hidden = true;
+        if (at !== -1) pp.sel.splice(at, 1);
+        else if (pp.sel.length >= 2) {
+          el('pp-err').textContent = '2개만 고를 수 있어요. 고른 질문을 하나 빼고 골라주세요';
+          el('pp-err').hidden = false;
+          return;
+        } else {
+          pp.sel.push(no);
+          pp.data[no] = pp.data[no] || blankPrep();
+        }
+        saveDraft(); renderPrep();
+      });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('textarea[data-f]'), function (n) {
+      n.addEventListener('input', function () { pp.data[noOf(n)][n.dataset.f] = n.value; saveDraft(); });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('input[data-fi]'), function (n) {
+      n.addEventListener('input', function () { pp.data[noOf(n)].follow[+n.dataset.fi][n.dataset.k] = n.value; saveDraft(); });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-fadd]'), function (b) {
+      b.addEventListener('click', function () { pp.data[noOf(b)].follow.push({ if: '', then: '' }); saveDraft(); renderPrep(); });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-fdel]'), function (b) {
+      b.addEventListener('click', function () { pp.data[noOf(b)].follow.splice(+b.dataset.fdel, 1); saveDraft(); renderPrep(); });
+    });
+  }
+
+  el('pp-go').addEventListener('click', function () {
+    if (!pp) return;
+    var err = el('pp-err'), btn = el('pp-go');
+    function stop(m) { err.textContent = m; err.hidden = false; }
+    if (pp.sel.length !== 2) return stop('질문을 2개 골라주세요 (지금 ' + pp.sel.length + '개)');
+    var items = [];
+    for (var i = 0; i < pp.sel.length; i++) {
+      var no = pp.sel[i], d = pp.data[no];
+      var follow = d.follow.map(function (f) { return { if: f.if.trim(), then: f.then.trim() }; })
+                           .filter(function (f) { return f.if && f.then; });
+      if (d.thought.trim().length < 5) return stop('Q' + no + ' 내 생각을 조금 더 적어주세요');
+      if (d.ask.trim().length < 5) return stop('Q' + no + ' 멤버에게 던질 질문을 적어주세요');
+      if (!follow.length) return stop('Q' + no + ' 꼬리 질문을 하나 이상, 양쪽 칸 다 적어주세요');
+      items.push({ no: no, thought: d.thought.trim(), ask: d.ask.trim(), follow: follow });
+    }
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1'; btn.textContent = '제출하는 중…'; err.hidden = true;
+    var topic = pp.topic, week = tp.week;
+    call({ action: 'prepSave', week: week, topic: topic, name: me, items: items }).then(function (d) {
+      delete btn.dataset.busy; btn.textContent = '수정해서 다시 제출';
+      try { localStorage.removeItem(draftKey(topic)); } catch (e) {}
+      if (week === tp.recWeek) {
+        tp.preps = tp.preps.filter(function (p) { return !(p.name === me && p.topic === topic); })
+                           .concat([{ name: me, topic: topic, count: 2, saved_at: d.saved.saved_at }]);
+      }
+      renderTopic(); renderNudge();
+      toast('토론 준비를 제출했습니다');
+      openView(topic);                       /* 제출하자마자 다른 리더들의 준비를 보여준다 */
+    }).catch(function (e) { delete btn.dataset.busy; btn.textContent = '제출하기'; showError(e); });
+  });
+
+  /* ── 준비 모아보기: 질문별로, 이번 주 먼저 · 지난 준비도 함께 ── */
+  function openView(num) {
+    var t = topicOf(num);
+    if (!t) return;
+    el('prep-wrap').hidden = true; pp = null;
+    el('pv-wrap').hidden = false;
+    el('pv-title').textContent = t.num + '. ' + t.title;
+    el('pv-body').innerHTML = '<p class="empty">불러오는 중…</p>';
+    Promise.all([loadQuestions(num), call({ action: 'prepView', week: tp.week, topic: num, name: me })])
+      .then(function (r) {
+        var qs = r[0], preps = r[1].preps || [];
+        if (!preps.length) { el('pv-body').innerHTML = '<p class="empty">아직 제출된 준비가 없습니다.</p>'; return; }
+        el('pv-body').innerHTML = qs.map(function (q) {
+          var list = preps.filter(function (p) { return p.no === q.no; });
+          if (!list.length) return '';
+          list.sort(function (a, b) {
+            if (a.week !== b.week) return a.week < b.week ? 1 : -1;
+            return a.name === me ? -1 : b.name === me ? 1 : (a.name < b.name ? -1 : 1);
+          });
+          return '<section class="pv-q"><p class="pv-qt"><span class="num">Q' + q.no + '</span> ' + esc(q.kr) + '</p>' +
+            list.map(function (p) {
+              return '<div class="pv-item' + (p.name === me ? ' is-me' : '') + '">' +
+                '<p class="pv-who">' + esc(p.name) + (p.name === me ? ' <span class="dim">(나)</span>' : '') +
+                (p.week !== tp.week ? '<span class="pv-wk">' + md(p.week) + ' 주 준비</span>' : '') + '</p>' +
+                '<p><b>생각</b>' + esc(p.thought) + '</p>' +
+                '<p><b>던질 질문</b>' + esc(p.ask) + '</p>' +
+                p.follow.map(function (f) {
+                  return '<p class="pv-f"><b>꼬리</b>' + (f.if ? '“' + esc(f.if) + '” → ' : '') + esc(f.then) + '</p>';
+                }).join('') + '</div>';
+            }).join('') + '</section>';
+        }).join('');
+      }).catch(function (e) {
+        var m = (e && e.message) || '';
+        el('pv-body').innerHTML = '<p class="empty">' +
+          (m.indexOf('먼저 제출') !== -1 ? '내 준비를 먼저 제출하면 다른 리더들의 준비를 볼 수 있어요.' : '불러오지 못했습니다.') + '</p>';
+      });
+  }
+
+  el('qz-next').addEventListener('click', function () { if (qz) openPrep(qz.topic); });
 
   /* ── 주제 올리기 (관리자) ── */
   var pk = null;
@@ -1001,13 +1216,15 @@
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) {
     n.addEventListener('click', function () {
       el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
-      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; sheetDate = null; qz = null;
+      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true;
+      sheetDate = null; qz = null; pp = null;
     });
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
       el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
-      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; qz = null;
+      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true;
+      qz = null; pp = null;
     }
   });
 
@@ -1057,7 +1274,7 @@
     if (!me || document.hidden || busy) return;
     loadMonth();
     if (!el('tab-mine').hidden) renderMine();
-    if (!el('tab-topic').hidden && tp.state === 'ok' && el('quiz-wrap').hidden) loadStatus();
+    if (!el('tab-topic').hidden && tp.state === 'ok' && el('quiz-wrap').hidden && el('prep-wrap').hidden) loadStatus();
   }
   if (REMOTE) {
     setInterval(refresh, 60000);
