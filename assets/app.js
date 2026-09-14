@@ -621,6 +621,11 @@
     return (d.getMonth() + 1) + '/' + d.getDate() + '(' + DAYS[d.getDay()] + ') ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
+  /* 시트 스크립트가 아직 토론 준비를 모르는 버전이어도 퀴즈는 그대로 돌게 */
+  function prepStatusSafe(week) {
+    return call({ action: 'prepStatus', week: week }).catch(function () { return { preps: [] }; });
+  }
+
   /* 주제 목록은 한 번만, 주간 주제·기록·스태프는 매번 */
   function loadTopic() {
     if (!REMOTE) { tp.state = 'local'; renderTopic(); return Promise.resolve(); }
@@ -633,7 +638,7 @@
       call({ action: 'weeks' }),
       call({ action: 'quizStatus', week: week }),
       db.listStaff(),
-      call({ action: 'prepStatus', week: week })
+      prepStatusSafe(week)
     ]).then(function (r) {
       tp.topics = r[0].topics || [];
       tp.weeks = r[1].weeks || [];
@@ -660,7 +665,7 @@
   function loadStatus() {
     var week = tp.week;
     return Promise.all([call({ action: 'weeks' }), call({ action: 'quizStatus', week: week }),
-                        call({ action: 'prepStatus', week: week })])
+                        prepStatusSafe(week)])
       .then(function (r) {
         if (week !== tp.week) return;
         tp.weeks = r[0].weeks || [];
