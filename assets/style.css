@@ -481,8 +481,9 @@ body.is-loading .monthlabel::after{
 .cd-step{padding:11px 2px; border-bottom:1px solid var(--rule-2)}
 .cd-mid{font-size:15.5px; line-height:1.5; color:var(--ink-2)}
 .cd-mid.strong{font-weight:600; color:var(--ink)}
-.cd-nav{margin-top:14px}
-.cd-nav .btn{margin-top:0}
+.cd-easy{font-size:15.5px; font-weight:600; line-height:1.45; color:var(--red); margin-top:6px}
+.cd-step.is-off .cd-q{color:var(--ink-3); font-weight:500}
+.cd-me{margin-top:8px}
 .cd-foot{display:flex; justify-content:space-between; gap:10px; margin-top:6px}
 
 
@@ -524,6 +525,7 @@ body.is-loading .monthlabel::after{
 .rv-say .cd-lab{color:var(--red)}
 .rv .cd-lab,.rv-row .cd-lab{display:block}
 .rv-no{color:var(--ink-3); margin-right:6px; font-size:12px}
+.rv-qt{display:block; font-size:12px; color:var(--ink-3); line-height:1.45; margin:1px 0 3px}
 .cd-others{margin-top:16px; padding-top:10px; border-top:2px solid var(--rule)}
 .cd-o{padding:8px 2px; border-bottom:1px solid var(--rule-2)}
 .cd-oq{font-size:12px; color:var(--ink-3); line-height:1.45}

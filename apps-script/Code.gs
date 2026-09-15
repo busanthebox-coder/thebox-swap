@@ -22,7 +22,7 @@ var STAFF_COLS = ['name', 'created_at'];
 var SWAP_COLS = ['id', 'date', 'requester', 'cover', 'time_note', 'reason', 'tasks', 'status', 'created_at', 'filled_at'];
 
 /* 이 스크립트의 버전. 앱은 이 숫자를 보고 새 기능을 켤지 정한다 — 한 곳에서만 올린다 */
-var API_V = 7;
+var API_V = 8;
 
 function doGet(e) { return handle(e); }
 function doPost(e) { return handle(e); }
@@ -526,8 +526,8 @@ function quizSubmit(req) {
 
 
 /* ════════════════════════════════════════════════════════════
-   토론 준비 — 퀴즈를 마친 리더가 메인 질문 2개를 골라
-   내 생각 · 멤버에게 던질 질문 · 꼬리 질문(멤버가 이렇게 말하면 ⇒ 이렇게 되묻기)을 적는다.
+   토론 준비 — 진행하는 주제의 메인 질문을 읽고 질문마다 내 생각을 영어로 적는다 (최소 THINK_MIN개).
+   예전(v7)엔 이끌 질문을 골라 여는 질문·꼬리 질문까지 적었다. 그 줄은 시트에 남아 있어 그대로 읽는다.
    다른 리더의 준비는 내 걸 제출한 뒤에만 열린다 (관리자는 언제나).
    ════════════════════════════════════════════════════════════ */
 
@@ -537,7 +537,7 @@ var QN_KEYS   = ['topic', 'no', 'kr', 'en'];
 var QN_HEAD   = ['주제', '질문 번호', '질문(한국어)', '질문(영어)'];
 var PREP_KEYS = ['week', 'topic', 'name', 'no', 'thought', 'ask', 'follow', 'saved_at'];
 var PREP_HEAD = ['주(월요일)', '주제', '이름', '질문 번호', '내 생각', '멤버에게 던질 질문', '꼬리 질문', '저장 시각'];
-var PREP_MIN = 1;                  // 깊게 이끌 질문 최소 수 (더 골라도 된다)
+var PREP_MIN = 0;                  // 이끌 질문 고르기는 없앴다 (v8). 옛 화면이 보내는 줄만 검사한다
 var THINK_MIN = 3;                 // 내 생각을 써야 하는 질문 최소 수
 var SHEET_LEAD = '진행';
 var LEAD_KEYS = ['week', 'name', 'topic', 'saved_at'];
