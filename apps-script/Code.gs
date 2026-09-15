@@ -21,6 +21,9 @@ var SPREADSHEET_ID = '';
 var STAFF_COLS = ['name', 'created_at'];
 var SWAP_COLS = ['id', 'date', 'requester', 'cover', 'time_note', 'reason', 'tasks', 'status', 'created_at', 'filled_at'];
 
+/* 이 스크립트의 버전. 앱은 이 숫자를 보고 새 기능을 켤지 정한다 — 한 곳에서만 올린다 */
+var API_V = 7;
+
 function doGet(e) { return handle(e); }
 function doPost(e) { return handle(e); }
 
@@ -45,7 +48,8 @@ function handle(e) {
       case 'claim':    return json(claim(req.id, req.name));
       case 'unclaim':  return json(unclaim(req.id, req.name));
       case 'cancel':   return json(cancel(req.id, req.name));
-      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 6, topics: topicCount(), questions: questionCount() });
+      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: API_V, topics: topicCount(), questions: questionCount() });
+      case 'importEasy': return json(importEasy(req.rows));
       case 'boot':     return json(boot(req));
       case 'setLead':  return json({ ok: true, lead: setLead(req) });
       case 'translate': return json(translateKo(req.text));
@@ -533,7 +537,8 @@ var QN_KEYS   = ['topic', 'no', 'kr', 'en'];
 var QN_HEAD   = ['주제', '질문 번호', '질문(한국어)', '질문(영어)'];
 var PREP_KEYS = ['week', 'topic', 'name', 'no', 'thought', 'ask', 'follow', 'saved_at'];
 var PREP_HEAD = ['주(월요일)', '주제', '이름', '질문 번호', '내 생각', '멤버에게 던질 질문', '꼬리 질문', '저장 시각'];
-var PREP_MIN = 1;                  // 최소로 골라야 하는 질문 수 (더 골라도 된다)
+var PREP_MIN = 1;                  // 깊게 이끌 질문 최소 수 (더 골라도 된다)
+var THINK_MIN = 3;                 // 내 생각을 써야 하는 질문 최소 수
 var SHEET_LEAD = '진행';
 var LEAD_KEYS = ['week', 'name', 'topic', 'saved_at'];
 var LEAD_HEAD = ['주(월요일)', '이름', '진행 주제', '저장 시각'];
@@ -571,9 +576,9 @@ function boot(req) {
     quiz[n] = quizOf(n);
     questions[n] = questionsOf(n);
   });
-  return { ok: true, v: 6, week: week, topics: listTopics(), weeks: weeks,
+  return { ok: true, v: API_V, week: week, topics: listTopics(), weeks: weeks,
            records: quizStatus(week), preps: prepStatus(week), staff: listStaff(),
-           leads: listLeads(week), quiz: quiz, questions: questions, prepMin: PREP_MIN };
+           leads: listLeads(week), quiz: quiz, questions: questions, prepMin: PREP_MIN, thinkMin: THINK_MIN };
 }
 
 /* ───────── 이번 주 내가 진행하는 주제 ─────────
@@ -608,6 +613,24 @@ function translateKo(text) {
   text = clean(text, 800);
   if (!text) return { ok: false, error: '바꿀 내용이 없습니다' };
   return { ok: true, text: LanguageApp.translate(text, 'ko', 'en') };
+}
+
+/** 주제지의 쉬운 질문(Easy Entry)을 토론질문 탭 끝에 번호 101~ 로 붙인다. 한 번만 */
+function importEasy(rows) {
+  if (!Array.isArray(rows) || !rows.length) return { ok: false, error: '넣을 질문이 없습니다' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sh = tabOf(SHEET_QN, QN_HEAD);
+    var has = rowsOf(sh, QN_KEYS).some(function (r) { return +r.no > 100; });
+    if (has) return { ok: false, error: '쉬운 질문이 이미 들어 있습니다' };
+    var vals = rows.map(function (r) { return QN_KEYS.map(function (k) { return r[k] == null ? '' : r[k]; }); });
+    sh.getRange(sh.getLastRow() + 1, 1, vals.length, QN_KEYS.length).setValues(vals);
+    SpreadsheetApp.flush();
+    var cache = CacheService.getScriptCache();
+    rows.forEach(function (r) { cache.remove('qn_' + r.topic); });
+    return { ok: true, inserted: vals.length };
+  } finally { lock.releaseLock(); }
 }
 
 function importQuestions(rows) {
@@ -650,11 +673,16 @@ function prepSave(req) {
     return { no: +it.no, thought: clean(it.thought, 600), ask: clean(it.ask, 400), follow: follow };
   }).filter(function (it) { if (!it.no || seen[it.no]) return false; seen[it.no] = true; return true; });
 
-  if (items.length < PREP_MIN) throw new Error('질문을 ' + PREP_MIN + '개 이상 골라주세요');
+  /* 이끄는 질문 = 여는 질문(ask)이 있는 줄. 나머지는 "내 생각"만 쓴 질문 */
+  var leads = items.filter(function (it) { return it.ask; });
   items.forEach(function (it) {
     if (it.thought.length < 5) throw new Error('Q' + it.no + ' 내 생각을 조금 더 적어주세요');
-    if (it.ask.length < 5) throw new Error('Q' + it.no + ' 멤버에게 던질 질문을 적어주세요');
-    if (!it.follow.length) throw new Error('Q' + it.no + ' 꼬리 질문을 하나 이상 적어주세요');
+  });
+  if (items.length < THINK_MIN) throw new Error('내 생각을 ' + THINK_MIN + '개 질문 이상 적어주세요');
+  if (leads.length < PREP_MIN) throw new Error('깊게 이끌 질문을 ' + PREP_MIN + '개 이상 골라주세요');
+  leads.forEach(function (it) {
+    if (it.ask.length < 5) throw new Error('Q' + it.no + ' 여는 질문을 적어주세요');
+    if (!it.follow.length) throw new Error('Q' + it.no + ' 대화 잇기를 하나 이상 적어주세요');
   });
 
   var now = new Date().toISOString();
@@ -670,7 +698,7 @@ function prepSave(req) {
       sh.appendRow([week, topic, name, it.no, it.thought, it.ask, followToText(it.follow), now]);
     });
     SpreadsheetApp.flush();
-    return { week: week, topic: topic, name: name, count: items.length, saved_at: now };
+    return { week: week, topic: topic, name: name, count: leads.length, thoughts: items.length, saved_at: now };
   } finally { lock.releaseLock(); }
 }
 
@@ -681,8 +709,9 @@ function prepStatus(week) {
   rowsOf(tabOf(SHEET_PREP, PREP_HEAD), PREP_KEYS).forEach(function (r) {
     if (normDate(r.week) !== week) return;
     var k = r.name + '|' + r.topic;
-    var m = map[k] || (map[k] = { name: String(r.name), topic: +r.topic, count: 0, saved_at: '' });
-    m.count++;
+    var m = map[k] || (map[k] = { name: String(r.name), topic: +r.topic, count: 0, thoughts: 0, saved_at: '' });
+    m.thoughts++;
+    if (String(r.ask || '').trim()) m.count++;
     if (String(r.saved_at) > m.saved_at) m.saved_at = String(r.saved_at);
   });
   return Object.keys(map).map(function (k) { return map[k]; });
