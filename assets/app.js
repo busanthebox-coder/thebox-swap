@@ -562,7 +562,9 @@
     { key: 't2', label: '주제 2', days: '수 · 목 · 일' }
   ];
   var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], preps: [], recWeek: null,
-             week: null, moved: false, quizCache: {}, qnCache: {}, pending: null };
+             week: null, moved: false, quizCache: {}, qnCache: {}, pending: null, v: 0 };
+  var PREP_MIN = 2;                       /* 토론 준비는 질문 최소 2개. 더 골라도 된다 */
+  function prepMax() { return tp.v >= 5 ? 99 : 2; }   /* 옛 시트 스크립트는 정확히 2개만 받는다 */
 
   function isAdmin() { return ADMINS.indexOf(me) !== -1; }
   function keyOf(d) { return ymd(d.getFullYear(), d.getMonth(), d.getDate()); }
@@ -608,10 +610,10 @@
     }
     return null;
   }
-  /* 퀴즈 통과 + 준비 2개 = 완료 */
+  /* 퀴즈 통과 + 준비 2개 이상 = 완료 */
   function progress(name, topic) {
     var r = recOf(name, topic), p = prepOf(name, topic);
-    var quiz = !!(r && r.passed), prep = !!(p && p.count >= 2);
+    var quiz = !!(r && r.passed), prep = !!(p && p.count >= PREP_MIN);
     return { rec: r, prep: p, quiz: quiz, prepDone: prep, done: quiz && prep };
   }
   function fmtWhen(iso) {
@@ -621,39 +623,88 @@
     return (d.getMonth() + 1) + '/' + d.getDate() + '(' + DAYS[d.getDay()] + ') ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
+  /* ── 불러오기 ──
+     시트 스크립트는 부를 때마다 2~4초가 든다. 그래서
+     1) 새 스크립트면 탭에 필요한 것(이번 주 퀴즈·토론 질문 포함)을 한 번에 받고
+     2) 받은 내용을 폰에 저장해 두었다가 다음에 열 때 먼저 보여준 뒤 뒤에서 새로 받는다 */
+  var TP_CACHE = 'thebox.tp.v1';
+  function cacheAll() {
+    try { return JSON.parse(localStorage.getItem(TP_CACHE) || 'null') || { weeks: {} }; } catch (e) { return { weeks: {} }; }
+  }
+  function readCache(week) { var c = cacheAll().weeks[week]; return c ? c.d : null; }
+  function saveCache(week) {
+    var w = weekOf(week), quiz = {}, questions = {};
+    if (w) [w.t1, w.t2].forEach(function (n) {
+      if (n && tp.quizCache[n]) quiz[n] = tp.quizCache[n];
+      if (n && tp.qnCache[n]) questions[n] = tp.qnCache[n];
+    });
+    var c = cacheAll();
+    c.weeks[week] = { at: Date.now(), d: { v: tp.v, topics: tp.topics, weeks: tp.weeks, records: tp.recs,
+                                            preps: tp.preps, staff: staff, quiz: quiz, questions: questions } };
+    Object.keys(c.weeks).sort().slice(0, -4).forEach(function (k) { delete c.weeks[k]; });   /* 최근 4주만 */
+    try { localStorage.setItem(TP_CACHE, JSON.stringify(c)); } catch (e) {}
+  }
+  function applyBoot(d, week) {
+    if (d.topics && d.topics.length) tp.topics = d.topics;
+    tp.weeks = d.weeks || [];
+    tp.recs = d.records || []; tp.preps = d.preps || []; tp.recWeek = week;
+    if (d.staff && d.staff.length) staff = d.staff;
+    if (d.v) tp.v = d.v;
+    Object.keys(d.quiz || {}).forEach(function (k) { tp.quizCache[k] = d.quiz[k]; });
+    Object.keys(d.questions || {}).forEach(function (k) { tp.qnCache[k] = d.questions[k]; });
+    tp.state = 'ok';
+  }
+
   /* 시트 스크립트가 아직 토론 준비를 모르는 버전이어도 퀴즈는 그대로 돌게 */
   function prepStatusSafe(week) {
     return call({ action: 'prepStatus', week: week }).catch(function () { return { preps: [] }; });
   }
+  /* 새 스크립트면 한 번에(boot), 옛 스크립트면 예전처럼 여러 번 나눠 부른다 */
+  function fetchBoot(week) {
+    return call({ action: 'boot', week: week }).catch(function (e) {
+      if (((e && e.message) || '').indexOf('알 수 없는 요청') === -1) throw e;
+      return Promise.all([
+        tp.topics.length ? { topics: tp.topics } : call({ action: 'topics' }),
+        call({ action: 'weeks' }), call({ action: 'quizStatus', week: week }),
+        db.listStaff(), prepStatusSafe(week)
+      ]).then(function (r) {
+        return { v: 4, topics: r[0].topics, weeks: r[1].weeks, records: r[2].records, staff: r[3], preps: r[4].preps };
+      });
+    });
+  }
 
-  /* 주제 목록은 한 번만, 주간 주제·기록·스태프는 매번 */
+  /* 일요일엔 다음 주 준비가 급하다. 관리자는 다음 주를 올려야 하니 바로 다음 주로,
+     스태프는 다음 주 주제가 올라와 있을 때만 다음 주로 보여준다 */
+  function startWeek() {
+    var k = mondayKey(new Date()), next = addDays(k, 7);
+    if (new Date().getDay() !== 0) return k;
+    if (isAdmin()) return next;
+    var known = [].concat.apply([], Object.keys(cacheAll().weeks).map(function (w) {
+      var d = readCache(w); return (d && d.weeks) || [];
+    }));
+    return known.some(function (w) { return w.week === next; }) ? next : k;
+  }
+
   function loadTopic() {
     if (!REMOTE) { tp.state = 'local'; renderTopic(); return Promise.resolve(); }
     if (!me) return Promise.resolve();
     if (tp.pending) return tp.pending;
-    if (!tp.week) tp.week = mondayKey(new Date());
+    if (!tp.week) { tp.week = startWeek(); }
     var week = tp.week;
-    tp.pending = Promise.all([
-      tp.topics.length ? { topics: tp.topics } : call({ action: 'topics' }),
-      call({ action: 'weeks' }),
-      call({ action: 'quizStatus', week: week }),
-      db.listStaff(),
-      prepStatusSafe(week)
-    ]).then(function (r) {
-      tp.topics = r[0].topics || [];
-      tp.weeks = r[1].weeks || [];
-      tp.recs = r[2].records || []; tp.recWeek = week;
-      staff = r[3] || staff;
-      tp.preps = r[4].preps || [];
-      tp.state = 'ok';
-      /* 일요일엔 다음 주 준비가 급하다. 관리자는 다음 주를 올려야 하니 바로 다음 주로,
-         스태프는 다음 주 주제가 올라와 있을 때만 다음 주로 보여준다 */
+    if (tp.state !== 'ok') {
+      var cached = readCache(week);
+      if (cached) { applyBoot(cached, week); renderTopic(); renderNudge(); }
+    }
+    tp.pending = fetchBoot(week).then(function (d) {
+      if (week !== tp.week) return;
+      applyBoot(d, week); saveCache(week);
       var next = addDays(mondayKey(new Date()), 7);
-      if (!tp.moved && new Date().getDay() === 0 && (weekOf(next) || isAdmin())) {
+      if (!tp.moved && new Date().getDay() === 0 && week !== next && weekOf(next)) {
         tp.moved = true; tp.week = next;
         return loadStatus();
       }
     }).catch(function (e) {
+      if (tp.state === 'ok') return;                 /* 저장해 둔 내용이 보이는 중이면 그대로 둔다 */
       var m = (e && e.message) || '';
       tp.state = m.indexOf('알 수 없는 요청') !== -1 ? 'old'
                : (m.indexOf('주제 목록') !== -1 || m.indexOf('폴더') !== -1) ? 'nofolder' : 'error';
@@ -664,15 +715,15 @@
 
   function loadStatus() {
     var week = tp.week;
-    return Promise.all([call({ action: 'weeks' }), call({ action: 'quizStatus', week: week }),
-                        prepStatusSafe(week)])
-      .then(function (r) {
-        if (week !== tp.week) return;
-        tp.weeks = r[0].weeks || [];
-        tp.recs = r[1].records || []; tp.recWeek = week;
-        tp.preps = r[2].preps || [];
-        renderTopic(); renderNudge();
-      }).catch(showError);
+    if (tp.recWeek !== week) {
+      var cached = readCache(week);
+      if (cached) { applyBoot(cached, week); renderTopic(); renderNudge(); }
+    }
+    return fetchBoot(week).then(function (d) {
+      if (week !== tp.week) return;
+      applyBoot(d, week); saveCache(week);
+      renderTopic(); renderNudge();
+    }).catch(showError);
   }
 
   function renderTopic() {
@@ -908,6 +959,7 @@
         if (qz) qz.sending = false;
         if (d.record && sent.week === tp.recWeek) {
           tp.recs = tp.recs.filter(function (r) { return !(r.name === me && r.topic === sent.topic); }).concat([d.record]);
+          saveCache(tp.recWeek);
         }
         renderTopic(); renderNudge();
         if (passed) toast('숙지 완료로 기록했습니다');
@@ -953,7 +1005,7 @@
         } else {
           try {
             var d = JSON.parse(localStorage.getItem(draftKey(num)) || 'null');
-            if (d && Array.isArray(d.sel)) { pp.sel = d.sel.slice(0, 2); pp.data = d.data || {}; }
+            if (d && Array.isArray(d.sel)) { pp.sel = d.sel.slice(0, prepMax()); pp.data = d.data || {}; }
           } catch (e) {}
         }
         el('pp-go').textContent = saved.length ? '수정해서 다시 제출' : '제출하기';
@@ -965,7 +1017,9 @@
   }
 
   function renderPrep() {
-    el('pp-chips').innerHTML = '<span class="pp-count">고른 질문 <b>' + pp.sel.length + '</b> / 2</span>';
+    el('pp-chips').innerHTML = '<span class="pp-count">고른 질문 <b>' + pp.sel.length + '</b>개' +
+      (pp.sel.length < PREP_MIN ? ' · 최소 ' + PREP_MIN + '개'
+        : pp.sel.length < Math.min(prepMax(), pp.qs.length) ? ' · 더 골라도 돼요' : '') + '</span>';
     el('pp-body').innerHTML = pp.qs.map(function (q) {
       var on = pp.sel.indexOf(q.no) !== -1;
       var d = pp.data[q.no] || blankPrep();
@@ -1001,8 +1055,8 @@
         var no = +b.dataset.pick, at = pp.sel.indexOf(no);
         el('pp-err').hidden = true;
         if (at !== -1) pp.sel.splice(at, 1);
-        else if (pp.sel.length >= 2) {
-          el('pp-err').textContent = '2개만 고를 수 있어요. 고른 질문을 하나 빼고 골라주세요';
+        else if (pp.sel.length >= prepMax()) {
+          el('pp-err').textContent = '지금은 ' + prepMax() + '개까지만 고를 수 있어요. 고른 질문을 하나 빼고 골라주세요';
           el('pp-err').hidden = false;
           return;
         } else {
@@ -1030,7 +1084,7 @@
     if (!pp) return;
     var err = el('pp-err'), btn = el('pp-go');
     function stop(m) { err.textContent = m; err.hidden = false; }
-    if (pp.sel.length !== 2) return stop('질문을 2개 골라주세요 (지금 ' + pp.sel.length + '개)');
+    if (pp.sel.length < PREP_MIN) return stop('질문을 ' + PREP_MIN + '개 이상 골라주세요 (지금 ' + pp.sel.length + '개)');
     var items = [];
     for (var i = 0; i < pp.sel.length; i++) {
       var no = pp.sel[i], d = pp.data[no];
@@ -1049,7 +1103,9 @@
       try { localStorage.removeItem(draftKey(topic)); } catch (e) {}
       if (week === tp.recWeek) {
         tp.preps = tp.preps.filter(function (p) { return !(p.name === me && p.topic === topic); })
-                           .concat([{ name: me, topic: topic, count: 2, saved_at: d.saved.saved_at }]);
+                           .concat([{ name: me, topic: topic, count: (d.saved && d.saved.count) || items.length,
+                                      saved_at: d.saved.saved_at }]);
+        saveCache(week);
       }
       renderTopic(); renderNudge();
       toast('토론 준비를 제출했습니다');
@@ -1179,6 +1235,7 @@
       delete btn.dataset.busy; btn.textContent = '이 주제로 올리기';
       tp.weeks = tp.weeks.filter(function (w) { return w.week !== pk.week; })
                          .concat([{ week: pk.week, t1: pk.sel[0], t2: pk.sel[1], set_by: me }]);
+      if (pk.week === tp.week) loadStatus();          /* 새 주제의 퀴즈·질문을 미리 받아 둔다 */
       btn.hidden = true;
       el('pk-text').value = noticeText(pk.week, topicOf(pk.sel[0]), topicOf(pk.sel[1]));
       el('pk-notice').hidden = false;

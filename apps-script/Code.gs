@@ -45,7 +45,8 @@ function handle(e) {
       case 'claim':    return json(claim(req.id, req.name));
       case 'unclaim':  return json(unclaim(req.id, req.name));
       case 'cancel':   return json(cancel(req.id, req.name));
-      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 4, topics: topicCount(), questions: questionCount() });
+      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 5, topics: topicCount(), questions: questionCount() });
+      case 'boot':     return json(boot(req));
 
       /* ── 토론 준비 ── */
       case 'questions':       return json({ ok: true, questions: questionsOf(req.topic) });
@@ -530,7 +531,7 @@ var QN_KEYS   = ['topic', 'no', 'kr', 'en'];
 var QN_HEAD   = ['주제', '질문 번호', '질문(한국어)', '질문(영어)'];
 var PREP_KEYS = ['week', 'topic', 'name', 'no', 'thought', 'ask', 'follow', 'saved_at'];
 var PREP_HEAD = ['주(월요일)', '주제', '이름', '질문 번호', '내 생각', '멤버에게 던질 질문', '꼬리 질문', '저장 시각'];
-var PREP_NEED = 2;                 // 골라야 하는 질문 수
+var PREP_MIN = 2;                  // 최소로 골라야 하는 질문 수 (더 골라도 된다)
 var ADMIN_NAMES = ['한남'];         // 다른 리더 준비를 언제든 볼 수 있는 이름
 var ARROW = ' ⇒ ';                 // 꼬리 질문을 시트에서 읽기 쉽게: "멤버 답 ⇒ 되묻기" 한 줄씩
 
@@ -540,10 +541,34 @@ function questionCount() {
 
 function questionsOf(topic) {
   topic = +topic;
-  return rowsOf(tabOf(SHEET_QN, QN_HEAD), QN_KEYS)
+  var cache = CacheService.getScriptCache(), key = 'qn_' + topic, hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+  var out = rowsOf(tabOf(SHEET_QN, QN_HEAD), QN_KEYS)
     .filter(function (r) { return +r.topic === topic; })
     .map(function (r) { return { no: +r.no, kr: String(r.kr), en: String(r.en || '') }; })
     .sort(function (a, b) { return a.no - b.no; });
+  cache.put(key, JSON.stringify(out), 600);
+  return out;
+}
+
+/**
+ * 주제 탭을 여는 데 필요한 것을 한 번에 돌려준다.
+ * 시트 스크립트는 부를 때마다 2초 안팎이 드는데, 예전엔 탭 하나 여는 데 5번,
+ * 퀴즈·토론 질문을 열 때 또 1번씩 불렀다. 이번 주 두 주제의 퀴즈와 질문까지 여기 싣는다.
+ */
+function boot(req) {
+  var week = normDate(req.week);
+  var weeks = listWeeks();
+  var w = weeks.filter(function (x) { return x.week === week; })[0];
+  var quiz = {}, questions = {};
+  if (w) [w.t1, w.t2].forEach(function (n) {
+    if (!n) return;
+    quiz[n] = quizOf(n);
+    questions[n] = questionsOf(n);
+  });
+  return { ok: true, v: 5, week: week, topics: listTopics(), weeks: weeks,
+           records: quizStatus(week), preps: prepStatus(week), staff: listStaff(),
+           quiz: quiz, questions: questions, prepMin: PREP_MIN };
 }
 
 function importQuestions(rows) {
@@ -586,7 +611,7 @@ function prepSave(req) {
     return { no: +it.no, thought: clean(it.thought, 600), ask: clean(it.ask, 400), follow: follow };
   }).filter(function (it) { if (!it.no || seen[it.no]) return false; seen[it.no] = true; return true; });
 
-  if (items.length !== PREP_NEED) throw new Error('질문을 ' + PREP_NEED + '개 골라주세요');
+  if (items.length < PREP_MIN) throw new Error('질문을 ' + PREP_MIN + '개 이상 골라주세요');
   items.forEach(function (it) {
     if (it.thought.length < 5) throw new Error('Q' + it.no + ' 내 생각을 조금 더 적어주세요');
     if (it.ask.length < 5) throw new Error('Q' + it.no + ' 멤버에게 던질 질문을 적어주세요');
