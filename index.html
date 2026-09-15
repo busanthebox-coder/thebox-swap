@@ -180,7 +180,8 @@
     <div class="grip"></div>
     <p class="qz-kicker">토론 준비</p>
     <h2 id="pp-title" class="sheet-title"></h2>
-    <p class="pp-guide">메인 질문 중 <b>2개 이상</b> 골라, 질문마다 내 생각 · 멤버에게 던질 질문 · 꼬리 질문을 적어주세요.</p>
+    <p class="pp-guide">원어민과 함께 <b>영어로</b> 이끌 준비예요. 질문을 골라 <b>여는 질문 · 내 답 · 대화 잇기</b>를 영어로 적어주세요. 질문 하나면 충분하고, 더 해도 좋아요.</p>
+    <div id="pp-help"></div>
     <div id="pp-chips" class="pp-chips"></div>
     <div id="pp-body"></div>
     <div class="qz-foot">
@@ -189,6 +190,25 @@
         <button id="pp-go" class="btn btn-red" type="button">제출하기</button>
         <button class="btn btn-ghost" type="button" data-close>닫기</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 진행 카드 (수업 중) ── -->
+<div id="card-wrap" class="modal" hidden>
+  <div class="modal-bg" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cd-title">
+    <div class="grip"></div>
+    <p class="qz-kicker">진행 카드 · 수업 중에 켜두세요</p>
+    <h2 id="cd-title" class="sheet-title"></h2>
+    <div id="cd-body"></div>
+    <div class="acts cd-nav">
+      <button id="cd-prev" class="btn btn-ghost" type="button">‹ 이전 질문</button>
+      <button id="cd-next" class="btn btn-ghost" type="button">다음 질문 ›</button>
+    </div>
+    <div class="cd-foot">
+      <button id="cd-edit" class="tc-link" type="button">준비 수정하기</button>
+      <button id="cd-others" class="tc-link" type="button">다른 리더들의 준비 보기 ›</button>
     </div>
   </div>
 </div>

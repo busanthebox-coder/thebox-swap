@@ -45,8 +45,10 @@ function handle(e) {
       case 'claim':    return json(claim(req.id, req.name));
       case 'unclaim':  return json(unclaim(req.id, req.name));
       case 'cancel':   return json(cancel(req.id, req.name));
-      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 5, topics: topicCount(), questions: questionCount() });
+      case 'ping':     return json({ ok: true, pong: true, tz: Session.getScriptTimeZone(), v: 6, topics: topicCount(), questions: questionCount() });
       case 'boot':     return json(boot(req));
+      case 'setLead':  return json({ ok: true, lead: setLead(req) });
+      case 'translate': return json(translateKo(req.text));
 
       /* ── 토론 준비 ── */
       case 'questions':       return json({ ok: true, questions: questionsOf(req.topic) });
@@ -531,7 +533,10 @@ var QN_KEYS   = ['topic', 'no', 'kr', 'en'];
 var QN_HEAD   = ['주제', '질문 번호', '질문(한국어)', '질문(영어)'];
 var PREP_KEYS = ['week', 'topic', 'name', 'no', 'thought', 'ask', 'follow', 'saved_at'];
 var PREP_HEAD = ['주(월요일)', '주제', '이름', '질문 번호', '내 생각', '멤버에게 던질 질문', '꼬리 질문', '저장 시각'];
-var PREP_MIN = 2;                  // 최소로 골라야 하는 질문 수 (더 골라도 된다)
+var PREP_MIN = 1;                  // 최소로 골라야 하는 질문 수 (더 골라도 된다)
+var SHEET_LEAD = '진행';
+var LEAD_KEYS = ['week', 'name', 'topic', 'saved_at'];
+var LEAD_HEAD = ['주(월요일)', '이름', '진행 주제', '저장 시각'];
 var ADMIN_NAMES = ['한남'];         // 다른 리더 준비를 언제든 볼 수 있는 이름
 var ARROW = ' ⇒ ';                 // 꼬리 질문을 시트에서 읽기 쉽게: "멤버 답 ⇒ 되묻기" 한 줄씩
 
@@ -566,9 +571,43 @@ function boot(req) {
     quiz[n] = quizOf(n);
     questions[n] = questionsOf(n);
   });
-  return { ok: true, v: 5, week: week, topics: listTopics(), weeks: weeks,
+  return { ok: true, v: 6, week: week, topics: listTopics(), weeks: weeks,
            records: quizStatus(week), preps: prepStatus(week), staff: listStaff(),
-           quiz: quiz, questions: questions, prepMin: PREP_MIN };
+           leads: listLeads(week), quiz: quiz, questions: questions, prepMin: PREP_MIN };
+}
+
+/* ───────── 이번 주 내가 진행하는 주제 ─────────
+   토론 준비는 진행하는 주제만 한다. 사장님 현황표에 누가 어느 주제를 맡는지 보이게 저장한다. */
+function listLeads(week) {
+  week = normDate(week);
+  return rowsOf(tabOf(SHEET_LEAD, LEAD_HEAD), LEAD_KEYS)
+    .filter(function (r) { return normDate(r.week) === week; })
+    .map(function (r) { return { name: String(r.name), topic: +r.topic || 0, saved_at: String(r.saved_at || '') }; });
+}
+
+function setLead(req) {
+  var week = normDate(req.week), name = clean(req.name, 30), topic = +req.topic || 0;
+  if (!week || !name) throw new Error('주와 이름이 필요합니다');
+  var now = new Date().toISOString();
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var sh = tabOf(SHEET_LEAD, LEAD_HEAD);
+    var hit = rowsOf(sh, LEAD_KEYS).filter(function (r) { return normDate(r.week) === week && String(r.name) === name; })[0];
+    var row = [week, name, topic || '', now];
+    if (hit) sh.getRange(hit._row, 1, 1, row.length).setValues([row]);
+    else sh.appendRow(row);
+    SpreadsheetApp.flush();
+    return { name: name, topic: topic, saved_at: now };
+  } finally { lock.releaseLock(); }
+}
+
+/* ───────── 한국어로 쓴 초안을 영어로 ─────────
+   구글 시트 스크립트에 기본으로 들어 있는 번역 기능. 따로 돈이 들지 않는다. */
+function translateKo(text) {
+  text = clean(text, 800);
+  if (!text) return { ok: false, error: '바꿀 내용이 없습니다' };
+  return { ok: true, text: LanguageApp.translate(text, 'ko', 'en') };
 }
 
 function importQuestions(rows) {

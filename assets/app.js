@@ -555,15 +555,15 @@
 
   /* ───────── 주간 주제 · 숙지 퀴즈 ─────────
      일요일에 관리자가 다음 주 주제 두 개를 올리면, 리더·대타 가리지 않고
-     스태프 전원이 PDF 앞뒤를 읽고 9문제를 풀어 "숙지 완료"를 받는다. */
+     스태프 전원이 PDF 앞뒤를 읽고 6문제를 풀어 "숙지 완료"를 받는다. */
   var ADMINS = Array.isArray(CFG.ADMINS) ? CFG.ADMINS : ['한남'];
   var SLOTS = [
     { key: 't1', label: '주제 1', days: '월 · 화 · 토' },
     { key: 't2', label: '주제 2', days: '수 · 목 · 일' }
   ];
   var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], preps: [], recWeek: null,
-             week: null, moved: false, quizCache: {}, qnCache: {}, pending: null, v: 0 };
-  var PREP_MIN = 2;                       /* 토론 준비는 질문 최소 2개. 더 골라도 된다 */
+             week: null, moved: false, quizCache: {}, qnCache: {}, pending: null, v: 0,
+             leads: [], prepMin: 0 };
   function prepMax() { return tp.v >= 5 ? 99 : 2; }   /* 옛 시트 스크립트는 정확히 2개만 받는다 */
 
   function isAdmin() { return ADMINS.indexOf(me) !== -1; }
@@ -610,11 +610,25 @@
     }
     return null;
   }
-  /* 퀴즈 통과 + 준비 2개 이상 = 완료 */
+  /* 이번 주 내가 진행하는 주제 (0 = 아직 안 고름, -1 = 진행 안 함) */
+  function leadKey() { return 'thebox.lead.' + tp.week + '.' + me; }
+  function leadOf(name) {
+    for (var i = 0; i < tp.leads.length; i++) if (tp.leads[i].name === name) return +tp.leads[i].topic || 0;
+    if (name === me) { try { return +localStorage.getItem(leadKey()) || 0; } catch (e) {} }
+    return 0;
+  }
+  function setMyLead(num) {
+    try { localStorage.setItem(leadKey(), String(num)); } catch (e) {}
+    tp.leads = tp.leads.filter(function (l) { return l.name !== me; }).concat([{ name: me, topic: num }]);
+    saveCache(tp.week); renderTopic(); renderNudge();
+    if (tp.v >= 6) call({ action: 'setLead', week: tp.week, name: me, topic: num }).catch(showError);
+  }
+  /* 완료 = 퀴즈 통과 + (내가 진행하는 주제라면) 토론 준비 */
   function progress(name, topic) {
     var r = recOf(name, topic), p = prepOf(name, topic);
-    var quiz = !!(r && r.passed), prep = !!(p && p.count >= PREP_MIN);
-    return { rec: r, prep: p, quiz: quiz, prepDone: prep, done: quiz && prep };
+    var quiz = !!(r && r.passed), prep = !!(p && p.count >= (tp.prepMin || 2));
+    var lead = leadOf(name) === +topic;
+    return { rec: r, prep: p, quiz: quiz, prepDone: prep, lead: lead, done: quiz && (!lead || prep) };
   }
   function fmtWhen(iso) {
     if (!iso) return '';
@@ -640,7 +654,8 @@
     });
     var c = cacheAll();
     c.weeks[week] = { at: Date.now(), d: { v: tp.v, topics: tp.topics, weeks: tp.weeks, records: tp.recs,
-                                            preps: tp.preps, staff: staff, quiz: quiz, questions: questions } };
+                                            preps: tp.preps, staff: staff, quiz: quiz, questions: questions,
+                                            leads: tp.leads, prepMin: tp.prepMin } };
     Object.keys(c.weeks).sort().slice(0, -4).forEach(function (k) { delete c.weeks[k]; });   /* 최근 4주만 */
     try { localStorage.setItem(TP_CACHE, JSON.stringify(c)); } catch (e) {}
   }
@@ -650,6 +665,8 @@
     tp.recs = d.records || []; tp.preps = d.preps || []; tp.recWeek = week;
     if (d.staff && d.staff.length) staff = d.staff;
     if (d.v) tp.v = d.v;
+    tp.leads = d.leads || tp.leads.filter(function (l) { return l.name === me; });
+    tp.prepMin = d.prepMin || (tp.v >= 6 ? 1 : 2);
     Object.keys(d.quiz || {}).forEach(function (k) { tp.quizCache[k] = d.quiz[k]; });
     Object.keys(d.questions || {}).forEach(function (k) { tp.qnCache[k] = d.questions[k]; });
     tp.state = 'ok';
@@ -743,7 +760,16 @@
     if (msg) { box.innerHTML = '<p class="empty">' + msg + '</p>'; return; }
 
     var w = weekOf(tp.week);
-    box.innerHTML = SLOTS.map(function (s) { return topicCard(s, w && w[s.key]); }).join('') + statusTable(w);
+    box.innerHTML = leadPicker(w) + SLOTS.map(function (s) { return topicCard(s, w && w[s.key]); }).join('') + statusTable(w);
+    Array.prototype.forEach.call(box.querySelectorAll('[data-lead]'), function (b) {
+      b.addEventListener('click', function () {
+        var n = +b.dataset.lead;
+        setMyLead(leadOf(me) === n ? 0 : n);
+      });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('[data-card]'), function (b) {
+      b.addEventListener('click', function () { openCard(+b.dataset.card); });
+    });
     Array.prototype.forEach.call(box.querySelectorAll('[data-quiz]'), function (b) {
       b.addEventListener('click', function () { openQuiz(+b.dataset.quiz); });
     });
@@ -755,89 +781,121 @@
     });
   }
 
+  function leadPicker(w) {
+    if (!w || (!w.t1 && !w.t2)) return '';
+    var mine = leadOf(me);
+    return '<section class="lead"><p class="lead-t">이번 주 내가 진행하는 주제</p><div class="lead-pills">' +
+      SLOTS.map(function (s) {
+        var n = w[s.key];
+        if (!n) return '';
+        return '<button type="button" class="lead-pill' + (mine === n ? ' is-on' : '') + '" data-lead="' + n + '">' +
+               s.label + ' · ' + s.days.replace(/ · /g, ' ') + '</button>';
+      }).join('') +
+      '<button type="button" class="lead-pill' + (mine === -1 ? ' is-on' : '') + '" data-lead="-1">이번 주 진행 안 함</button></div>' +
+      '<p class="lead-note">토론 준비는 진행하는 주제만 하면 돼요. 대타로 들어가게 되면 그 주제도 준비하면 됩니다.</p></section>';
+  }
+
   function myBadge(g) {
-    if (g.done) return '<span class="badge mat">준비 완료</span>';
-    if (g.quiz) return '<span class="badge warn">토론 준비 남음</span>';
+    if (g.done) return '<span class="badge mat">완료</span>';
+    if (g.quiz && g.lead) return '<span class="badge warn">토론 준비 남음</span>';
     return '<span class="badge ok">' + (g.rec ? '퀴즈 푸는 중' : '아직 안 함') + '</span>';
+  }
+
+  function stepRow(n, label, mins, right, ok, off) {
+    return '<div class="stp' + (off ? ' is-off' : '') + '"><span class="stp-n' + (ok ? ' ok' : '') + '">' + (ok ? '✓' : n) + '</span>' +
+      '<span class="stp-l">' + label + (mins ? '<span class="stp-m">' + mins + '</span>' : '') + '</span>' + right + '</div>';
   }
 
   function topicCard(s, num) {
     var t = num ? topicOf(num) : null;
-    var head = '<div class="tc-top"><span class="tc-slot">' + s.label + '<span class="dim"> · ' + s.days + '</span></span>';
+    var head = '<div class="tc-top"><span class="tc-slot">' + s.label + '<span class="dim"> · ' + s.days + '</span>' +
+               (t && leadOf(me) === t.num ? '<span class="tc-mine">내가 진행</span>' : '') + '</span>';
     if (!t) {
       return '<article class="tc tc-empty">' + head + '</div><p class="tc-none">' +
         (num ? num + '번 PDF를 찾지 못했습니다.' : '아직 주제가 올라오지 않았어요.') + '</p></article>';
     }
-    var g = progress(me, t.num), r = g.rec;
-    var act, foot;
-    if (!g.quiz) {
-      act = t.quiz ? '<button class="btn btn-red" type="button" data-quiz="' + t.num + '">숙지 퀴즈 풀기</button>'
-                   : '<button class="btn btn-flat" type="button" disabled>퀴즈 준비 중</button>';
-      foot = '① 숙지 퀴즈 → ② 토론 준비 · 맡은 날 수업 전까지';
-    } else if (!g.prepDone) {
-      act = '<button class="btn btn-red" type="button" data-prep="' + t.num + '">토론 준비하기</button>';
-      foot = '퀴즈 ✓ 첫 시도 ' + r.first_score + '/' + r.total + ' · 이제 토론 준비가 남았어요';
+    var g = progress(me, t.num), r = g.rec, lead = leadOf(me);
+    var s1 = stepRow(1, 'PDF 앞뒤 읽기', '약 5분',
+      '<a class="stp-a" href="' + pdfUrl(t) + '" target="_blank" rel="noopener">PDF 보기</a>', g.quiz);
+    var s2 = stepRow(2, '숙지 퀴즈 6문제', '약 2분',
+      g.quiz ? '<span class="stp-done">완료 · 첫 시도 ' + r.first_score + '/' + r.total + '</span>'
+             : t.quiz ? '<button class="stp-a red" type="button" data-quiz="' + t.num + '">' + (r ? '이어서 풀기' : '풀기') + '</button>'
+                      : '<span class="stp-off">퀴즈 준비 중</span>', g.quiz);
+    var s3;
+    if (g.lead) {
+      s3 = stepRow(3, '토론 준비 · 영어로', '약 5분',
+        g.prepDone ? '<span class="stp-pair"><button class="stp-a red" type="button" data-card="' + t.num + '">진행 카드</button>' +
+                     '<button class="stp-a" type="button" data-prep="' + t.num + '">수정</button></span>'
+                   : '<button class="stp-a red" type="button" data-prep="' + t.num + '">준비하기</button>', g.prepDone);
+    } else if (lead === 0) {
+      s3 = stepRow(3, '토론 준비', '', '<span class="stp-off">위에서 진행 주제를 고르면 열려요</span>', false, true);
     } else {
-      act = '<button class="btn btn-flat" type="button" data-prep="' + t.num + '">내 준비 · 수정</button>';
-      foot = '퀴즈 ✓ 첫 시도 ' + r.first_score + '/' + r.total + ' · 준비 ✓ ' + fmtWhen(g.prep.saved_at);
+      s3 = stepRow(3, '토론 준비', '', g.prepDone
+        ? '<button class="stp-a" type="button" data-card="' + t.num + '">진행 카드</button>'
+        : '<button class="stp-link" type="button" data-prep="' + t.num + '">진행 주제가 아니라 안 해도 돼요 · 대타면 준비</button>', g.prepDone, !g.prepDone);
     }
     var view = (g.prepDone || isAdmin())
       ? '<button class="tc-link" type="button" data-view="' + t.num + '">다른 리더들의 준비 보기 ›</button>' : '';
     return '<article class="tc' + (g.done ? ' tc-done' : '') + '">' + head + myBadge(g) + '</div>' +
       '<h3 class="tc-title"><span class="tc-num num">' + t.num + '</span>' + esc(t.title) + '</h3>' +
-      '<div class="tc-acts"><a class="btn btn-ghost" href="' + pdfUrl(t) + '" target="_blank" rel="noopener">PDF 앞뒤 보기</a>' + act + '</div>' +
-      '<p class="tc-due">' + foot + '</p>' + view + '</article>';
+      '<div class="stps">' + s1 + s2 + s3 + '</div>' + view + '</article>';
   }
 
   function statusTable(w) {
     if (!w || (!w.t1 && !w.t2)) return '';
     if (tp.recWeek !== tp.week) return '<section class="st"><p class="empty">현황을 불러오는 중…</p></section>';
     var names = staff.slice().sort();
+    function quizCell(x, n) {
+      if (!n) return '<td class="c-na">—</td>';
+      var r = recOf(x, n);
+      if (r && r.passed) return '<td class="c-done">완료 <span class="num">' + r.first_score + '/' + r.total + '</span><small>' + fmtWhen(r.passed_at) + '</small></td>';
+      if (r) return '<td class="c-try">푸는 중</td>';
+      return '<td class="c-wait">아직</td>';
+    }
+    var leadCount = 0, prepCount = 0;
+    var rows = names.map(function (x) {
+      var lead = leadOf(x), slot = SLOTS.filter(function (s) { return w[s.key] === lead; })[0];
+      var leadTd = slot ? '<td>' + slot.label + '</td>' : lead === -1 ? '<td class="c-wait">안 함</td>' : '<td class="c-wait">미선택</td>';
+      var prepTd;
+      if (slot) {
+        leadCount++;
+        var p = prepOf(x, lead), ok = p && p.count >= (tp.prepMin || 2);
+        if (ok) prepCount++;
+        prepTd = ok ? '<td class="c-done">완료 · ' + p.count + '개<small>' + fmtWhen(p.saved_at) + '</small></td>' : '<td class="c-wait">아직</td>';
+      } else prepTd = '<td class="c-na">—</td>';
+      return '<tr' + (x === me ? ' class="me-row"' : '') + '><th>' + esc(x) + '</th>' + leadTd +
+             quizCell(x, w.t1) + quizCell(x, w.t2) + prepTd + '</tr>';
+    }).join('');
     var sum = SLOTS.map(function (s) {
       var n = w[s.key];
       if (!n) return '';
-      var done = names.filter(function (x) { return progress(x, n).done; }).length;
-      return s.label + ' ' + done + '/' + names.length;
-    }).filter(Boolean).join(' · ');
-    var rows = names.map(function (x) {
-      return '<tr' + (x === me ? ' class="me-row"' : '') + '><th>' + esc(x) + '</th>' + SLOTS.map(function (s) {
-        var n = w[s.key];
-        if (!n) return '<td class="c-na">—</td>';
-        var g = progress(x, n), r = g.rec;
-        if (g.done) {
-          return '<td class="c-done">완료 <span class="num">' + r.first_score + '/' + r.total + '</span>' +
-                 '<small>' + fmtWhen(g.prep.saved_at) + '</small></td>';
-        }
-        if (g.quiz) return '<td class="c-try">퀴즈만 <span class="num">' + r.first_score + '/' + r.total + '</span><small>' + fmtWhen(r.passed_at) + '</small></td>';
-        if (r) return '<td class="c-try">퀴즈 푸는 중</td>';
-        return '<td class="c-wait">아직</td>';
-      }).join('') + '</tr>';
-    }).join('');
+      var done = names.filter(function (x) { var r = recOf(x, n); return r && r.passed; }).length;
+      return s.label + ' 퀴즈 ' + done + '/' + names.length;
+    }).filter(Boolean).join(' · ') + ' · 토론 준비 ' + prepCount + '/' + leadCount;
     return '<section class="st"><div class="mlist-h"><b>숙지 · 준비 현황</b><span class="num">' + sum + '</span></div>' +
-      '<div class="tbl-scroll"><table class="st-t"><thead><tr><th></th>' +
+      '<div class="tbl-scroll"><table class="st-t"><thead><tr><th></th><th>진행</th>' +
       SLOTS.map(function (s) {
         var t = topicOf(w[s.key]);
-        return '<th>' + s.label + (t ? '<small>' + t.num + '번</small>' : '') + '</th>';
-      }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<p class="note">완료 = 퀴즈 + 토론 준비. 숫자는 퀴즈 첫 시도 점수, 아래는 끝낸 시각입니다.</p></section>';
+        return '<th>' + s.label + ' 퀴즈' + (t ? '<small>' + t.num + '번</small>' : '') + '</th>';
+      }).join('') + '<th>토론 준비<small>진행 주제</small></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<p class="note">퀴즈 숫자는 첫 시도 점수, 아래는 끝낸 시각입니다. 토론 준비는 각자 진행하는 주제만 봅니다.</p></section>';
   }
 
   /* 달력 위에 뜨는 알림: 이번 주 주제에서 남은 단계가 있으면 */
   function renderNudge() {
     var n = el('nudge');
     var w = tp.state === 'ok' && me ? weekOf(tp.week) : null;
-    var left = 0;
-    if (w) SLOTS.forEach(function (s) {
-      var num = w[s.key];
-      if (!num) return;
-      var g = progress(me, num);
-      if (!g.quiz) left++;
-      if (!g.prepDone) left++;
-    });
-    if (!left) { n.hidden = true; return; }
+    var left = [];
+    if (w) {
+      SLOTS.forEach(function (s) { var num = w[s.key]; if (num && !progress(me, num).quiz) left.push(s.label + ' 퀴즈'); });
+      var lead = leadOf(me);
+      if (lead === 0 && (w.t1 || w.t2)) left.push('진행 주제 고르기');
+      else if (lead > 0 && !progress(me, lead).prepDone) left.push('토론 준비');
+    }
+    if (!left.length) { n.hidden = true; return; }
     n.hidden = false;
-    n.innerHTML = '<span>' + (weekTag(tp.week) || weekLabel(tp.week)) + ' 주제 · 퀴즈와 토론 준비 ' + left +
-                  '개 남았어요</span><span class="nudge-go">하러 가기 ›</span>';
+    n.innerHTML = '<span>' + (weekTag(tp.week) || weekLabel(tp.week)) + ' 주제 · 남은 것: ' + left.join(', ') +
+                  '</span><span class="nudge-go">하러 가기 ›</span>';
   }
 
   /* ── 퀴즈 ── */
@@ -847,7 +905,7 @@
     for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; }
     return a;
   }
-  /* 내용 3 + 표현 9개 중 3 + 팝퀴즈 3. 보기 순서는 매번 섞는다 */
+  /* 내용 3 + 표현 9개 중 1 + 팝퀴즈 3개 중 2 = 6문제. 보기 순서는 매번 섞는다 */
   function buildItems(q) {
     function mk(kind, x) {
       var order = shuffle(x.options.map(function (_, i) { return i; }));
@@ -856,8 +914,8 @@
     }
     return [].concat(
       q.content.map(function (x) { return mk('뒷면 · 내용', x); }),
-      shuffle(q.expr).slice(0, 3).map(function (x) { return mk('뒷면 · 표현', x); }),
-      q.pop.map(function (x) { return mk('앞면 · 팝퀴즈', x); })
+      shuffle(q.expr).slice(0, 1).map(function (x) { return mk('뒷면 · 표현', x); }),
+      shuffle(q.pop).slice(0, 2).map(function (x) { return mk('앞면 · 팝퀴즈', x); })
     );
   }
 
@@ -946,7 +1004,7 @@
       : right + '/' + total + ' · 틀린 ' + (total - right) + '개는 PDF를 다시 보고 골라주세요';
     el('qz-go').textContent = '다시 채점하기';
     el('qz-go').hidden = passed;
-    el('qz-next').hidden = !passed;
+    el('qz-next').hidden = !(passed && leadOf(me) === qz.topic);
     if (!passed) {
       var firstWrong = el('qz-body').querySelector('.qz-hint');
       if (firstWrong) firstWrong.parentNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -966,15 +1024,58 @@
       }).catch(function (e) { if (qz) qz.sending = false; showError(e); });
   });
 
-  /* ── 토론 준비 ──
-     질문 목록을 먼저 보여주고, 고른 질문만 펼쳐 세 칸을 적게 한다.
-     닫았다 열어도 쓰던 내용이 남도록 이 기기에 초안을 저장한다. */
+  /* ── 토론 준비 (영어) ──
+     원어민이 섞인 세션을 영어로 이끌 준비. 질문마다
+       1) 여는 질문  2) 내 답  3) 대화 잇기(되묻기 · 원어민에게 · 멤버에게 연결)
+     를 영어로 적는다. 진행 표현·주제지 표현 버튼, "영어로 바꾸기"로 부담을 줄인다.
+     꼬리 질문은 시트에 {if, then}으로 저장하되, 원어민·연결 줄은 if 자리에 [원어민]·[연결] 표시를 둔다. */
   var pp = null;
-  function draftKey(topic) { return 'thebox.prep.' + tp.week + '.' + topic + '.' + me; }
-  function blankPrep() { return { thought: '', ask: '', follow: [{ if: '', then: '' }] }; }
+  var LINE_T = { ask: '되묻기', native: '원어민에게', bridge: '멤버에게 연결' };
+  var FAC = [
+    { t: 'ask', text: 'Why do you think so?' },
+    { t: 'ask', text: 'What would you do if ...?' },
+    { t: 'ask', text: 'Can you give us an example?' },
+    { t: 'native', text: 'In your country, how do people usually handle this?' },
+    { t: 'native', text: 'How would you say that more naturally?' },
+    { t: 'native', text: "Is that common where you're from?" },
+    { t: 'bridge', text: '[Name], do you agree with [Name]?' },
+    { t: 'bridge', text: 'Has anyone had a similar experience?' },
+    { t: 'bridge', text: '[Name], is that different in Korea?' }
+  ];
+  function prepMin() { return tp.prepMin || 2; }
+  function draftKey(topic) { return 'thebox.prep2.' + tp.week + '.' + topic + '.' + me; }
+  function cardKey(topic) { return 'thebox.card.' + tp.week + '.' + topic + '.' + me; }
+  function blankPrep() { return { ask: '', thought: '', lines: [{ t: 'native', a: '', b: '' }, { t: 'ask', a: '', b: '' }] }; }
+  function hangulRatio(s) {
+    var h = (s.match(/[가-힣]/g) || []).length, l = (s.match(/[A-Za-z]/g) || []).length;
+    return h + l ? h / (h + l) : 0;
+  }
+  function isEnglish(s) { return hangulRatio(s) <= 0.3; }
+  function encodeLines(lines) {
+    return lines.map(function (x) {
+      return x.t === 'native' ? { if: '[원어민]', then: x.b.trim() }
+           : x.t === 'bridge' ? { if: '[연결]', then: x.b.trim() }
+           : { if: x.a.trim(), then: x.b.trim() };
+    });
+  }
+  function decodeLines(follow) {
+    return (follow || []).map(function (f) {
+      if (f.if === '[원어민]') return { t: 'native', a: '', b: f.then };
+      if (f.if === '[연결]') return { t: 'bridge', a: '', b: f.then };
+      return { t: 'ask', a: f.if || '', b: f.then };
+    });
+  }
   function loadQuestions(topic) {
     return tp.qnCache[topic] ? Promise.resolve(tp.qnCache[topic])
       : call({ action: 'questions', topic: topic }).then(function (d) { return (tp.qnCache[topic] = d.questions || []); });
+  }
+  /* 주제지의 단어·표현: 퀴즈 표현 문제의 보기에 그 주제의 단어 6개와 문장 3개가 다 들어 있다 */
+  function topicPhrases(topic) {
+    var q = tp.quizCache[topic], seen = {}, out = [];
+    ((q && q.expr) || []).forEach(function (x) {
+      x.options.forEach(function (o) { if (o && !seen[o]) { seen[o] = 1; out.push(o); } });
+    });
+    return out.sort(function (a, b) { return a.length - b.length; });
   }
   function saveDraft() {
     try { localStorage.setItem(draftKey(pp.topic), JSON.stringify({ sel: pp.sel, data: pp.data })); } catch (e) {}
@@ -984,23 +1085,27 @@
     var t = topicOf(num);
     if (!t) return;
     el('quiz-wrap').hidden = true; qz = null;
+    el('card-wrap').hidden = true;
     el('prep-wrap').hidden = false;
     el('pp-title').textContent = t.num + '. ' + t.title;
     el('pp-chips').innerHTML = '';
+    el('pp-help').innerHTML = '';
     el('pp-body').innerHTML = '<p class="empty">질문을 불러오는 중…</p>';
     el('pp-err').hidden = true;
     pp = null;
     var mine = progress(me, num).prepDone;
-    Promise.all([loadQuestions(num), mine ? call({ action: 'prepView', week: tp.week, topic: num, name: me }) : null])
+    var needQuiz = tp.quizCache[num] ? null : call({ action: 'quiz', topic: num }).then(function (d) { tp.quizCache[num] = d.quiz; }).catch(function () {});
+    Promise.all([loadQuestions(num), mine ? call({ action: 'prepView', week: tp.week, topic: num, name: me }) : null, needQuiz])
       .then(function (r) {
         var qs = r[0];
         if (!qs.length) { el('pp-body').innerHTML = '<p class="empty">이 주제는 아직 토론 질문이 없습니다.</p>'; return; }
-        pp = { topic: num, qs: qs, sel: [], data: {} };
+        pp = { topic: num, qs: qs, sel: [], data: {}, focusNo: null, focusEl: null };
         var saved = (r[1] && r[1].preps || []).filter(function (x) { return x.week === tp.week && x.name === me; });
         if (saved.length) {
           saved.forEach(function (x) {
             pp.sel.push(x.no);
-            pp.data[x.no] = { thought: x.thought, ask: x.ask, follow: x.follow.length ? x.follow : [{ if: '', then: '' }] };
+            var lines = decodeLines(x.follow);
+            pp.data[x.no] = { ask: x.ask, thought: x.thought, lines: lines.length ? lines : blankPrep().lines };
           });
         } else {
           try {
@@ -1009,6 +1114,7 @@
           } catch (e) {}
         }
         el('pp-go').textContent = saved.length ? '수정해서 다시 제출' : '제출하기';
+        renderHelp();
         renderPrep();
       }).catch(function (e) {
         el('pp-body').innerHTML = '<p class="empty">질문을 불러오지 못했습니다.</p>';
@@ -1016,91 +1122,174 @@
       });
   }
 
+  /* 영어 쓰기 도우미: 진행 표현(누르면 해당 종류의 줄이 추가됨) + 주제지 표현(누르면 커서 자리에 들어감) */
+  function renderHelp() {
+    var ph = topicPhrases(pp.topic);
+    el('pp-help').innerHTML =
+      '<details class="help" open><summary>영어 쓰기 도우미<span class="chev">▾</span></summary>' +
+      '<p class="help-t">진행 표현 <span class="dim">— 누르면 대화 잇기에 한 줄 추가</span></p><div class="chips">' +
+      FAC.map(function (f, i) {
+        return '<button type="button" class="chip2" data-fac="' + i + '"><span class="lt lt-' + f.t + '">' + LINE_T[f.t] + '</span>' + esc(f.text) + '</button>';
+      }).join('') + '</div>' +
+      (ph.length ? '<p class="help-t">주제지 표현 <span class="dim">— 누르면 커서 자리에 들어감</span></p><div class="chips">' +
+        ph.map(function (x, i) { return '<button type="button" class="chip2" data-ph="' + i + '">' + esc(x) + '</button>'; }).join('') + '</div>' : '') +
+      '<p class="help-t">말로 입력 <span class="dim">— 폰 키보드의 마이크 버튼을 누르고 영어로 말하면 그대로 적혀요</span></p>' +
+      '</details>';
+    Array.prototype.forEach.call(el('pp-help').querySelectorAll('[data-fac]'), function (b) {
+      b.addEventListener('click', function () {
+        var no = pp.focusNo || pp.sel[0];
+        if (!no) { stopPrep('먼저 아래에서 질문을 하나 골라주세요'); return; }
+        var f = FAC[+b.dataset.fac];
+        pp.data[no].lines.push({ t: f.t, a: '', b: f.text });
+        el('pp-err').hidden = true;
+        toast('Q' + no + ' 대화 잇기에 "' + LINE_T[f.t] + '" 줄을 넣었어요');
+        saveDraft(); renderPrep();
+      });
+    });
+    Array.prototype.forEach.call(el('pp-help').querySelectorAll('[data-ph]'), function (b) {
+      b.addEventListener('click', function () {
+        var txt = ph[+b.dataset.ph], n = pp.focusEl && document.body.contains(pp.focusEl) ? pp.focusEl : null;
+        if (!n) {
+          var no = pp.sel[0];
+          if (!no) { stopPrep('먼저 아래에서 질문을 하나 골라주세요'); return; }
+          n = el('pp-body').querySelector('.pq[data-no="' + no + '"] textarea[data-f="thought"]');
+        }
+        var s = n.selectionStart != null ? n.selectionStart : n.value.length, e2 = n.selectionEnd != null ? n.selectionEnd : s;
+        var pre = n.value.slice(0, s), gap = pre && !/\s$/.test(pre) ? ' ' : '';
+        n.value = pre + gap + txt + n.value.slice(e2);
+        n.dispatchEvent(new Event('input', { bubbles: true }));
+        n.focus();
+      });
+    });
+  }
+  function stopPrep(m) { el('pp-err').textContent = m; el('pp-err').hidden = false; }
+
+  function trBtn() { return '<button type="button" class="tr" data-tr hidden>영어로 바꾸기</button>'; }
+
   function renderPrep() {
-    el('pp-chips').innerHTML = '<span class="pp-count">고른 질문 <b>' + pp.sel.length + '</b>개' +
-      (pp.sel.length < PREP_MIN ? ' · 최소 ' + PREP_MIN + '개'
-        : pp.sel.length < Math.min(prepMax(), pp.qs.length) ? ' · 더 골라도 돼요' : '') + '</span>';
+    var min = prepMin(), n = pp.sel.length;
+    el('pp-chips').innerHTML = '<span class="pp-count">고른 질문 <b>' + n + '</b>개' +
+      (n < min ? ' · 최소 ' + min + '개' : n < Math.min(prepMax(), pp.qs.length) ? ' · 더 골라도 돼요' : '') + '</span>';
     el('pp-body').innerHTML = pp.qs.map(function (q) {
       var on = pp.sel.indexOf(q.no) !== -1;
       var d = pp.data[q.no] || blankPrep();
       var h = '<section class="pq' + (on ? ' is-on' : '') + '" data-no="' + q.no + '">' +
         '<button type="button" class="pq-head" data-pick="' + q.no + '">' +
         '<span class="pq-no num">Q' + q.no + '</span>' +
-        '<span class="pq-t">' + esc(q.kr) + (q.en ? '<small>' + esc(q.en) + '</small>' : '') + '</span>' +
+        '<span class="pq-t">' + esc(q.en || q.kr) + (q.en ? '<small>' + esc(q.kr) + '</small>' : '') + '</span>' +
         '<span class="pq-tog">' + (on ? '고름 ✓' : '고르기') + '</span></button>';
       if (on) {
         h += '<div class="pq-form">' +
-          '<label class="lab long">내 생각</label>' +
-          '<textarea class="input" rows="2" data-f="thought" placeholder="이 질문에 대한 내 답을 한두 줄로">' + esc(d.thought) + '</textarea>' +
-          '<label class="lab long">멤버에게 던질 질문</label>' +
-          '<textarea class="input" rows="2" data-f="ask" placeholder="멤버가 편하게 말을 꺼낼 수 있는 질문">' + esc(d.ask) + '</textarea>' +
-          '<label class="lab long">꼬리 질문 <span class="dim">— 멤버가 이렇게 말하면 → 이렇게 되묻기</span></label>' +
-          d.follow.map(function (f, i) {
-            return '<div class="fl-row">' +
-              '<input class="input" data-fi="' + i + '" data-k="if" placeholder="멤버 답: 말할 거예요" value="' + esc(f.if) + '">' +
-              '<span class="fl-arrow">→</span>' +
-              '<input class="input" data-fi="' + i + '" data-k="then" placeholder="되묻기: 친구가 서운해하면요?" value="' + esc(f.then) + '">' +
-              (d.follow.length > 1 ? '<button type="button" class="del" data-fdel="' + i + '" aria-label="꼬리 질문 빼기">×</button>' : '') +
-              '</div>';
+          '<label class="lab long">1. 여는 질문 <span class="dim">모두에게 쉽게 던질 말</span></label>' +
+          '<div class="fx"><textarea class="input" rows="2" data-f="ask" placeholder="Have you ever ...? What would you do?">' + esc(d.ask) + '</textarea>' + trBtn() + '</div>' +
+          '<label class="lab long">2. 내 답 <span class="dim">아무도 말 안 하면 내가 먼저</span></label>' +
+          '<div class="fx"><textarea class="input" rows="2" data-f="thought" placeholder="I\'d probably ... because ...">' + esc(d.thought) + '</textarea>' + trBtn() + '</div>' +
+          '<label class="lab long">3. 대화 잇기 <span class="dim">2줄 이상 · 원어민에게나 멤버에게 연결을 한 줄은 꼭</span></label>' +
+          d.lines.map(function (x, i) {
+            var body = x.t === 'ask'
+              ? '<div class="ln-ask"><div class="fx"><input class="input" data-li="' + i + '" data-k="a" placeholder="Member says: I\'d tell them" value="' + esc(x.a) + '">' + trBtn() + '</div>' +
+                '<span class="ln-arr">→</span><div class="fx"><input class="input" data-li="' + i + '" data-k="b" placeholder="Ask back: What if ...?" value="' + esc(x.b) + '">' + trBtn() + '</div></div>'
+              : '<div class="fx"><input class="input" data-li="' + i + '" data-k="b" placeholder="' +
+                (x.t === 'native' ? '[Name], in your country, ...?' : '[Name], do you agree with [Name]?') + '" value="' + esc(x.b) + '">' + trBtn() + '</div>';
+            return '<div class="ln"><div class="ln-top"><span class="lt lt-' + x.t + '">' + LINE_T[x.t] + '</span>' +
+              (d.lines.length > 1 ? '<button type="button" class="ln-del" data-ldel="' + i + '" aria-label="이 줄 빼기">×</button>' : '') +
+              '</div>' + body + '</div>';
           }).join('') +
-          '<button type="button" class="ghost-sm wide" data-fadd="1">+ 꼬리 질문 추가</button></div>';
+          '<div class="ln-add"><button type="button" class="ghost-sm" data-ladd="native">+ 원어민에게</button>' +
+          '<button type="button" class="ghost-sm" data-ladd="bridge">+ 멤버에게 연결</button>' +
+          '<button type="button" class="ghost-sm" data-ladd="ask">+ 되묻기</button></div></div>';
       }
       return h + '</section>';
     }).join('');
 
     var body = el('pp-body');
     function noOf(node) { return +node.closest('.pq').dataset.no; }
+    function syncTr(n) {
+      var b = n.parentNode.querySelector('[data-tr]');
+      if (b) b.hidden = !/[가-힣]/.test(n.value);
+    }
     Array.prototype.forEach.call(body.querySelectorAll('[data-pick]'), function (b) {
       b.addEventListener('click', function () {
         var no = +b.dataset.pick, at = pp.sel.indexOf(no);
         el('pp-err').hidden = true;
         if (at !== -1) pp.sel.splice(at, 1);
         else if (pp.sel.length >= prepMax()) {
-          el('pp-err').textContent = '지금은 ' + prepMax() + '개까지만 고를 수 있어요. 고른 질문을 하나 빼고 골라주세요';
-          el('pp-err').hidden = false;
+          stopPrep('지금은 ' + prepMax() + '개까지만 고를 수 있어요. 고른 질문을 하나 빼고 골라주세요');
           return;
         } else {
           pp.sel.push(no);
           pp.data[no] = pp.data[no] || blankPrep();
+          pp.focusNo = no;
         }
         saveDraft(); renderPrep();
       });
     });
-    Array.prototype.forEach.call(body.querySelectorAll('textarea[data-f]'), function (n) {
-      n.addEventListener('input', function () { pp.data[noOf(n)][n.dataset.f] = n.value; saveDraft(); });
+    Array.prototype.forEach.call(body.querySelectorAll('textarea[data-f], input[data-li]'), function (n) {
+      syncTr(n);
+      n.addEventListener('focus', function () { pp.focusNo = noOf(n); pp.focusEl = n; });
+      n.addEventListener('input', function () {
+        var d = pp.data[noOf(n)];
+        if (n.dataset.f) d[n.dataset.f] = n.value;
+        else d.lines[+n.dataset.li][n.dataset.k] = n.value;
+        el('pp-err').hidden = true;
+        syncTr(n); saveDraft();
+      });
     });
-    Array.prototype.forEach.call(body.querySelectorAll('input[data-fi]'), function (n) {
-      n.addEventListener('input', function () { pp.data[noOf(n)].follow[+n.dataset.fi][n.dataset.k] = n.value; saveDraft(); });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-tr]'), function (b) {
+      b.addEventListener('click', function () {
+        var n = b.parentNode.querySelector('textarea, input');
+        if (tp.v < 6) { toast('시트 스크립트를 새 버전으로 바꾸면 쓸 수 있어요'); return; }
+        b.disabled = true; b.textContent = '바꾸는 중…';
+        call({ action: 'translate', text: n.value }).then(function (d) {
+          n.value = d.text || n.value;
+          n.dispatchEvent(new Event('input', { bubbles: true }));
+          b.disabled = false; b.textContent = '영어로 바꾸기';
+          toast('영어로 바꿨어요. 어색한 곳만 다듬어 주세요');
+        }).catch(function (e) { b.disabled = false; b.textContent = '영어로 바꾸기'; showError(e); });
+      });
     });
-    Array.prototype.forEach.call(body.querySelectorAll('[data-fadd]'), function (b) {
-      b.addEventListener('click', function () { pp.data[noOf(b)].follow.push({ if: '', then: '' }); saveDraft(); renderPrep(); });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-ladd]'), function (b) {
+      b.addEventListener('click', function () {
+        var no = noOf(b);
+        pp.data[no].lines.push({ t: b.dataset.ladd, a: '', b: '' });
+        el('pp-err').hidden = true;
+        pp.focusNo = no; saveDraft(); renderPrep();
+      });
     });
-    Array.prototype.forEach.call(body.querySelectorAll('[data-fdel]'), function (b) {
-      b.addEventListener('click', function () { pp.data[noOf(b)].follow.splice(+b.dataset.fdel, 1); saveDraft(); renderPrep(); });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-ldel]'), function (b) {
+      b.addEventListener('click', function () { pp.data[noOf(b)].lines.splice(+b.dataset.ldel, 1); saveDraft(); renderPrep(); });
     });
   }
 
   el('pp-go').addEventListener('click', function () {
     if (!pp) return;
-    var err = el('pp-err'), btn = el('pp-go');
-    function stop(m) { err.textContent = m; err.hidden = false; }
-    if (pp.sel.length < PREP_MIN) return stop('질문을 ' + PREP_MIN + '개 이상 골라주세요 (지금 ' + pp.sel.length + '개)');
+    var btn = el('pp-go');
+    if (pp.sel.length < prepMin()) return stopPrep('질문을 ' + prepMin() + '개 이상 골라주세요 (지금 ' + pp.sel.length + '개)');
     var items = [];
+    var engHint = ' — 한국어로 썼다면 칸 옆 "영어로 바꾸기"를 눌러주세요';
     for (var i = 0; i < pp.sel.length; i++) {
       var no = pp.sel[i], d = pp.data[no];
-      var follow = d.follow.map(function (f) { return { if: f.if.trim(), then: f.then.trim() }; })
-                           .filter(function (f) { return f.if && f.then; });
-      if (d.thought.trim().length < 5) return stop('Q' + no + ' 내 생각을 조금 더 적어주세요');
-      if (d.ask.trim().length < 5) return stop('Q' + no + ' 멤버에게 던질 질문을 적어주세요');
-      if (!follow.length) return stop('Q' + no + ' 꼬리 질문을 하나 이상, 양쪽 칸 다 적어주세요');
-      items.push({ no: no, thought: d.thought.trim(), ask: d.ask.trim(), follow: follow });
+      if (d.ask.trim().length < 5) return stopPrep('Q' + no + ' 여는 질문을 적어주세요');
+      if (!isEnglish(d.ask)) return stopPrep('Q' + no + ' 여는 질문을 영어로 적어주세요' + engHint);
+      if (d.thought.trim().length < 5) return stopPrep('Q' + no + ' 내 답을 적어주세요');
+      if (!isEnglish(d.thought)) return stopPrep('Q' + no + ' 내 답을 영어로 적어주세요' + engHint);
+      var lines = d.lines.filter(function (x) { return x.b.trim() && (x.t !== 'ask' || x.a.trim()); });
+      if (lines.length < 2) return stopPrep('Q' + no + ' 대화 잇기를 2줄 이상 적어주세요 (되묻기는 양쪽 칸 다)');
+      if (!lines.some(function (x) { return x.t !== 'ask'; })) return stopPrep('Q' + no + ' 대화 잇기에 "원어민에게"나 "멤버에게 연결"을 한 줄은 넣어주세요');
+      for (var j = 0; j < lines.length; j++) {
+        if (!isEnglish(lines[j].a + ' ' + lines[j].b)) return stopPrep('Q' + no + ' 대화 잇기 ' + (j + 1) + '번째 줄을 영어로 적어주세요' + engHint);
+      }
+      items.push({ no: no, thought: d.thought.trim(), ask: d.ask.trim(), follow: encodeLines(lines) });
     }
     if (btn.dataset.busy) return;
-    btn.dataset.busy = '1'; btn.textContent = '제출하는 중…'; err.hidden = true;
+    btn.dataset.busy = '1'; btn.textContent = '제출하는 중…'; el('pp-err').hidden = true;
     var topic = pp.topic, week = tp.week;
     call({ action: 'prepSave', week: week, topic: topic, name: me, items: items }).then(function (d) {
       delete btn.dataset.busy; btn.textContent = '수정해서 다시 제출';
-      try { localStorage.removeItem(draftKey(topic)); } catch (e) {}
+      try {
+        localStorage.removeItem(draftKey(topic));
+        localStorage.setItem(cardKey(topic), JSON.stringify(items));      /* 진행 카드는 폰에 두고 바로 연다 */
+      } catch (e) {}
       if (week === tp.recWeek) {
         tp.preps = tp.preps.filter(function (p) { return !(p.name === me && p.topic === topic); })
                            .concat([{ name: me, topic: topic, count: (d.saved && d.saved.count) || items.length,
@@ -1108,16 +1297,68 @@
         saveCache(week);
       }
       renderTopic(); renderNudge();
-      toast('토론 준비를 제출했습니다');
-      openView(topic);                       /* 제출하자마자 다른 리더들의 준비를 보여준다 */
+      toast('토론 준비를 제출했습니다. 수업 때 이 진행 카드를 켜두세요');
+      openCard(topic);
     }).catch(function (e) { delete btn.dataset.busy; btn.textContent = '제출하기'; showError(e); });
   });
+
+  /* ── 진행 카드: 수업 중에 폰으로 보는 화면 ── */
+  var cd = null;
+  function openCard(num) {
+    var t = topicOf(num);
+    if (!t) return;
+    el('prep-wrap').hidden = true; pp = null;
+    el('card-wrap').hidden = false;
+    el('cd-title').textContent = t.num + '. ' + t.title;
+    el('cd-body').innerHTML = '<p class="empty">불러오는 중…</p>';
+    var local = null;
+    try { local = JSON.parse(localStorage.getItem(cardKey(num)) || 'null'); } catch (e) {}
+    var get = local ? Promise.resolve(local)
+      : call({ action: 'prepView', week: tp.week, topic: num, name: me }).then(function (d) {
+          return (d.preps || []).filter(function (x) { return x.week === tp.week && x.name === me; })
+            .map(function (x) { return { no: x.no, thought: x.thought, ask: x.ask, follow: x.follow }; });
+        });
+    Promise.all([loadQuestions(num), get]).then(function (r) {
+      var items = (r[1] || []).slice().sort(function (a, b) { return a.no - b.no; });
+      if (!items.length) { el('cd-body').innerHTML = '<p class="empty">아직 준비한 내용이 없습니다.</p>'; return; }
+      cd = { topic: num, qs: r[0], items: items, i: 0 };
+      renderCard();
+    }).catch(function (e) { el('cd-body').innerHTML = '<p class="empty">불러오지 못했습니다.</p>'; showError(e); });
+  }
+  function renderCard() {
+    var it = cd.items[cd.i], q = cd.qs.filter(function (x) { return x.no === it.no; })[0] || {};
+    var n = 2;
+    el('cd-body').innerHTML =
+      '<p class="cd-pos">내가 준비한 질문 ' + (cd.i + 1) + ' / ' + cd.items.length + '</p>' +
+      '<p class="cd-q"><span class="num">Q' + it.no + '</span> ' + esc(q.en || q.kr || '') + '</p>' +
+      (q.en ? '<p class="cd-qk">' + esc(q.kr) + '</p>' : '') +
+      '<div class="cd-say"><p class="cd-lab">1 · 모두에게 묻기</p><p class="cd-big">' + esc(it.ask) + '</p></div>' +
+      '<div class="cd-step"><p class="cd-lab">2 · 조용하면 내가 먼저</p><p class="cd-mid">' + esc(it.thought) + '</p></div>' +
+      /* 수업 흐름대로: 원어민에게 → 멤버에게 연결 → 되묻기 */
+      decodeLines(it.follow).map(function (x, i) { x.i = i; return x; }).sort(function (a, b) {
+        var o = { native: 0, bridge: 1, ask: 2 };
+        return o[a.t] - o[b.t] || a.i - b.i;
+      }).map(function (x) {
+        n++;
+        return '<div class="cd-step"><p class="cd-lab">' + n + ' · <span class="lt lt-' + x.t + '">' + LINE_T[x.t] + '</span>' +
+          (x.t === 'ask' && x.a ? ' <span class="dim">"' + esc(x.a) + '" 라고 하면</span>' : '') + '</p>' +
+          '<p class="cd-mid strong">' + esc(x.b) + '</p></div>';
+      }).join('');
+    el('cd-prev').disabled = cd.i === 0;
+    el('cd-next').disabled = cd.i === cd.items.length - 1;
+    el('cd-next').textContent = cd.i === cd.items.length - 1 ? '마지막 질문' : '다음 질문 ›';
+  }
+  el('cd-prev').addEventListener('click', function () { if (cd && cd.i > 0) { cd.i--; renderCard(); el('card-wrap').querySelector('.sheet').scrollTop = 0; } });
+  el('cd-next').addEventListener('click', function () { if (cd && cd.i < cd.items.length - 1) { cd.i++; renderCard(); el('card-wrap').querySelector('.sheet').scrollTop = 0; } });
+  el('cd-edit').addEventListener('click', function () { if (cd) openPrep(cd.topic); });
+  el('cd-others').addEventListener('click', function () { if (cd) openView(cd.topic); });
 
   /* ── 준비 모아보기: 질문별로, 이번 주 먼저 · 지난 준비도 함께 ── */
   function openView(num) {
     var t = topicOf(num);
     if (!t) return;
     el('prep-wrap').hidden = true; pp = null;
+    el('card-wrap').hidden = true;
     el('pv-wrap').hidden = false;
     el('pv-title').textContent = t.num + '. ' + t.title;
     el('pv-body').innerHTML = '<p class="empty">불러오는 중…</p>';
@@ -1132,15 +1373,16 @@
             if (a.week !== b.week) return a.week < b.week ? 1 : -1;
             return a.name === me ? -1 : b.name === me ? 1 : (a.name < b.name ? -1 : 1);
           });
-          return '<section class="pv-q"><p class="pv-qt"><span class="num">Q' + q.no + '</span> ' + esc(q.kr) + '</p>' +
+          return '<section class="pv-q"><p class="pv-qt"><span class="num">Q' + q.no + '</span> ' + esc(q.en || q.kr) + '</p>' +
             list.map(function (p) {
               return '<div class="pv-item' + (p.name === me ? ' is-me' : '') + '">' +
                 '<p class="pv-who">' + esc(p.name) + (p.name === me ? ' <span class="dim">(나)</span>' : '') +
                 (p.week !== tp.week ? '<span class="pv-wk">' + md(p.week) + ' 주 준비</span>' : '') + '</p>' +
-                '<p><b>생각</b>' + esc(p.thought) + '</p>' +
-                '<p><b>던질 질문</b>' + esc(p.ask) + '</p>' +
-                p.follow.map(function (f) {
-                  return '<p class="pv-f"><b>꼬리</b>' + (f.if ? '“' + esc(f.if) + '” → ' : '') + esc(f.then) + '</p>';
+                '<p><b>여는 질문</b>' + esc(p.ask) + '</p>' +
+                '<p><b>내 답</b>' + esc(p.thought) + '</p>' +
+                decodeLines(p.follow).map(function (x) {
+                  return '<p class="pv-f"><b><span class="lt lt-' + x.t + '">' + LINE_T[x.t] + '</span></b>' +
+                    (x.t === 'ask' && x.a ? '"' + esc(x.a) + '" → ' : '') + esc(x.b) + '</p>';
                 }).join('') + '</div>';
             }).join('') + '</section>';
         }).join('');
@@ -1278,14 +1520,14 @@
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) {
     n.addEventListener('click', function () {
       el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
-      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true;
+      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true; el('card-wrap').hidden = true;
       sheetDate = null; qz = null; pp = null;
     });
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
       el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
-      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true;
+      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true; el('card-wrap').hidden = true;
       qz = null; pp = null;
     }
   });
@@ -1336,7 +1578,7 @@
     if (!me || document.hidden || busy) return;
     loadMonth();
     if (!el('tab-mine').hidden) renderMine();
-    if (!el('tab-topic').hidden && tp.state === 'ok' && el('quiz-wrap').hidden && el('prep-wrap').hidden) loadStatus();
+    if (!el('tab-topic').hidden && tp.state === 'ok' && el('quiz-wrap').hidden && el('prep-wrap').hidden && el('card-wrap').hidden) loadStatus();
   }
   if (REMOTE) {
     setInterval(refresh, 60000);
