@@ -34,12 +34,41 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  /* 알림은 화면 위쪽에 — 아래쪽 버튼·입력칸을 가리지 않게. 누르면 바로 닫힌다 */
   function toast(msg) {
     var t = el('toast');
     t.textContent = msg; t.hidden = false;
+    t.classList.remove('in'); void t.offsetWidth; t.classList.add('in');
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { t.hidden = true; }, 2600);
+    toast._t = setTimeout(function () { t.hidden = true; }, 2400);
   }
+  /* 불러오는 동안 보여줄 회색 틀 */
+  function skel(kind) {
+    if (kind === 'topic') return '<div class="sk-wrap"><div class="sk sk-card sm"></div><div class="sk sk-card"></div><div class="sk sk-card"></div></div>';
+    return '<div class="sk-wrap"><div class="sk sk-line w60"></div><div class="sk sk-block"></div><div class="sk sk-line"></div><div class="sk sk-line w80"></div><div class="sk sk-block"></div></div>';
+  }
+  function reduced() { return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }
+  /* 끝냈을 때 작은 축하: 색종이 조각이 퍼졌다 사라진다 */
+  function celebrate(anchor) {
+    if (reduced()) return;
+    var r = anchor ? anchor.getBoundingClientRect() : { left: innerWidth / 2, top: innerHeight / 3, width: 0, height: 0 };
+    var box = document.createElement('div'), cols = ['#D3202F', '#0C7355', '#1E4FA6', '#E0A100', '#14171C'];
+    box.className = 'confetti';
+    box.style.left = (r.left + r.width / 2) + 'px'; box.style.top = (r.top + r.height / 2) + 'px';
+    for (var i = 0; i < 26; i++) {
+      var p = document.createElement('i'), a = Math.random() * Math.PI * 2, d = 60 + Math.random() * 90;
+      p.style.setProperty('--x', Math.round(Math.cos(a) * d) + 'px');
+      p.style.setProperty('--y', Math.round(Math.sin(a) * d - 40) + 'px');
+      p.style.setProperty('--r', Math.round(Math.random() * 540 - 270) + 'deg');
+      p.style.background = cols[i % cols.length];
+      p.style.animationDelay = Math.round(Math.random() * 60) + 'ms';
+      box.appendChild(p);
+    }
+    document.body.appendChild(box);
+    setTimeout(function () { box.remove(); }, 1300);
+    if (navigator.vibrate) try { navigator.vibrate([12, 40, 12]); } catch (e) {}
+  }
+  var CHECK = '<svg class="ok-mark" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="M15 27l7 7 15-16"/></svg>';
   function uuid() {
     if (crypto.randomUUID) return crypto.randomUUID();
     return 'id-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
@@ -184,6 +213,8 @@
     if (tp.state === 'ok') { renderTopic(); renderNudge(); } else loadTopic();
     /* 단톡방 공지 링크(#topic)로 들어왔으면 주제 탭부터 */
     if (location.hash === '#topic' && !setMe.hashDone) { setMe.hashDone = true; switchTab('topic'); }
+    moveInk();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(moveInk);
   }
 
   /* ───────── 계정 / 이름 전환 ─────────
@@ -563,7 +594,7 @@
   ];
   var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], preps: [], recWeek: null,
              week: null, moved: false, quizCache: {}, qnCache: {}, pending: null, v: 0,
-             leads: [], prepMin: 0 };
+             leads: [], prepMin: 0, streaks: null, flash: null };
   function prepMax() { return tp.v >= 5 ? 99 : 2; }   /* 옛 시트 스크립트는 정확히 2개만 받는다 */
 
   function isAdmin() { return ADMINS.indexOf(me) !== -1; }
@@ -658,7 +689,7 @@
     var c = cacheAll();
     c.weeks[week] = { at: Date.now(), d: { v: tp.v, topics: tp.topics, weeks: tp.weeks, records: tp.recs,
                                             preps: tp.preps, staff: staff, quiz: quiz, questions: questions,
-                                            leads: tp.leads, prepMin: tp.prepMin, thinkMin: tp.thinkMin } };
+                                            leads: tp.leads, prepMin: tp.prepMin, thinkMin: tp.thinkMin, streaks: tp.streaks } };
     Object.keys(c.weeks).sort().slice(0, -4).forEach(function (k) { delete c.weeks[k]; });   /* 최근 4주만 */
     try { localStorage.setItem(TP_CACHE, JSON.stringify(c)); } catch (e) {}
   }
@@ -671,6 +702,7 @@
     tp.leads = d.leads || tp.leads.filter(function (l) { return l.name === me; });
     tp.prepMin = d.prepMin || (tp.v >= 6 ? 1 : 2);
     tp.thinkMin = d.thinkMin || 0;
+    tp.streaks = d.streaks || null;          /* v9부터: 이름별 연속 완료 주 */
     Object.keys(d.quiz || {}).forEach(function (k) { tp.quizCache[k] = d.quiz[k]; });
     Object.keys(d.questions || {}).forEach(function (k) { tp.qnCache[k] = d.questions[k]; });
     tp.state = 'ok';
@@ -715,6 +747,7 @@
     if (tp.state !== 'ok') {
       var cached = readCache(week);
       if (cached) { applyBoot(cached, week); renderTopic(); renderNudge(); }
+      else renderTopic();                            /* 처음 여는 폰: 회색 틀부터 */
     }
     tp.pending = fetchBoot(week).then(function (d) {
       if (week !== tp.week) return;
@@ -759,12 +792,15 @@
       old: isAdmin() ? '시트 스크립트를 새 버전으로 다시 배포해 주세요.<br>배포 관리 → 연필 → 새 버전' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
       nofolder: isAdmin() ? '시트의 주제목록 탭이 비어 있습니다.' : '주제 기능을 준비하는 중입니다. 곧 열립니다.',
       error: '주제를 불러오지 못했습니다.<br>' + esc((tp.err || '').slice(0, 80)),
-      idle: '불러오는 중…'
+      idle: ''
     }[tp.state];
+    if (tp.state === 'idle') { box.innerHTML = skel('topic'); box.dataset.sk = '1'; return; }
     if (msg) { box.innerHTML = '<p class="empty">' + msg + '</p>'; return; }
 
     var w = weekOf(tp.week);
-    box.innerHTML = leadPicker(w) + SLOTS.map(function (s) { return topicCard(s, w && w[s.key]); }).join('') + statusTable(w);
+    box.innerHTML = weekBar(w) + leadPicker(w) + SLOTS.map(function (s) { return topicCard(s, w && w[s.key]); }).join('') + statusTable(w);
+    if (box.dataset.sk) { delete box.dataset.sk; box.classList.remove('fade-in'); void box.offsetWidth; box.classList.add('fade-in'); }
+    if (tp.flash && Date.now() - tp.flash.at > 4000) tp.flash = null;
     Array.prototype.forEach.call(box.querySelectorAll('[data-lead]'), function (b) {
       b.addEventListener('click', function () {
         var n = +b.dataset.lead;
@@ -783,6 +819,31 @@
     Array.prototype.forEach.call(box.querySelectorAll('[data-view]'), function (b) {
       b.addEventListener('click', function () { openView(+b.dataset.view); });
     });
+  }
+
+  /* 이번 주 내 할 일: 퀴즈 두 개 + 진행 주제 고르기 (+ 진행하면 토론 준비). 칸이 하나씩 찬다 */
+  function weekSteps(w) {
+    var out = [];
+    SLOTS.forEach(function (s) { if (w[s.key]) out.push({ l: s.label + ' 퀴즈', ok: progress(me, w[s.key]).quiz }); });
+    var lead = leadOf(me);
+    out.push({ l: '진행 주제', ok: lead !== 0 });
+    if (lead > 0) out.push({ l: '토론 준비', ok: progress(me, lead).prepDone });
+    return out;
+  }
+  function streakChip(n, big) {
+    if (!n) return '';
+    return '<span class="streak' + (big ? ' big' : '') + '" title="두 주제 퀴즈를 모두 끝낸 주가 ' + n + '주 이어졌어요">' +
+      '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.6 1.2c.3 2.1-.6 3.3-1.6 4.4C6 6.7 5 7.8 5 9.7 5 11.5 6.3 13 8 13s3-1.4 3-3.1c0-1-.4-1.8-.9-2.4.9.3 1.6 1 2 1.9.3-1.2.1-2.6-.6-3.9-.6-1.2-1.6-2.3-2.9-4.3z"/></svg>' +
+      n + '주 연속</span>';
+  }
+  function weekBar(w) {
+    if (!w || (!w.t1 && !w.t2) || !me) return '';
+    var st = weekSteps(w), k = st.filter(function (x) { return x.ok; }).length, all = k === st.length;
+    var n = tp.streaks ? (tp.streaks[me] || 0) : 0;
+    return '<section class="wb' + (all ? ' is-all' : '') + '"><div class="wb-top"><b>' + (all ? '이번 주 할 일 끝' : '이번 주 내 할 일') + '</b>' +
+      '<span class="wb-n num">' + k + ' / ' + st.length + '</span>' + streakChip(n, true) + '</div>' +
+      '<div class="wb-bar">' + st.map(function (x) { return '<i class="' + (x.ok ? 'on' : '') + '"></i>'; }).join('') + '</div>' +
+      '<div class="wb-l">' + st.map(function (x) { return '<span class="' + (x.ok ? 'on' : '') + '">' + x.l + '</span>'; }).join('') + '</div></section>';
   }
 
   function leadPicker(w) {
@@ -805,11 +866,12 @@
     return '<span class="badge ok">' + (g.rec ? '퀴즈 푸는 중' : '아직 안 함') + '</span>';
   }
 
-  function stepRow(n, label, mins, right, ok, off) {
-    return '<div class="stp' + (off ? ' is-off' : '') + '"><span class="stp-n' + (ok ? ' ok' : '') + '">' + (ok ? '✓' : n) + '</span>' +
+  function stepRow(n, label, mins, right, ok, off, fresh) {
+    return '<div class="stp' + (off ? ' is-off' : '') + '"><span class="stp-n' + (ok ? ' ok' : '') + (ok && fresh ? ' fresh' : '') + '">' + (ok ? '✓' : n) + '</span>' +
       '<span class="stp-l">' + label + (mins ? '<span class="stp-m">' + mins + '</span>' : '') + '</span>' + right + '</div>';
   }
 
+  function isFresh(num, kind) { return !!(tp.flash && tp.flash.topic === num && tp.flash.kind === kind && Date.now() - tp.flash.at < 4000); }
   function topicCard(s, num) {
     var t = num ? topicOf(num) : null;
     var head = '<div class="tc-top"><span class="tc-slot">' + s.label + '<span class="dim"> · ' + s.days + '</span>' +
@@ -820,17 +882,17 @@
     }
     var g = progress(me, t.num), r = g.rec, lead = leadOf(me);
     var s1 = stepRow(1, 'PDF 앞뒤 읽기', '약 5분',
-      '<a class="stp-a" href="' + pdfUrl(t) + '" target="_blank" rel="noopener">PDF 보기</a>', g.quiz);
+      '<a class="stp-a" href="' + pdfUrl(t) + '" target="_blank" rel="noopener">PDF 보기</a>', g.quiz, false, isFresh(t.num, 'quiz'));
     var s2 = stepRow(2, '숙지 퀴즈 6문제', '약 2분',
       g.quiz ? '<span class="stp-done">완료 · 첫 시도 ' + r.first_score + '/' + r.total + '</span>'
              : t.quiz ? '<button class="stp-a red" type="button" data-quiz="' + t.num + '">' + (r ? '이어서 풀기' : '풀기') + '</button>'
-                      : '<span class="stp-off">퀴즈 준비 중</span>', g.quiz);
+                      : '<span class="stp-off">퀴즈 준비 중</span>', g.quiz, false, isFresh(t.num, 'quiz'));
     var s3;
     if (g.lead) {
       s3 = stepRow(3, '토론 준비 · 영어로', '약 5분',
         g.prepDone ? '<span class="stp-pair"><button class="stp-a red" type="button" data-card="' + t.num + '">진행 카드</button>' +
                      '<button class="stp-a" type="button" data-prep="' + t.num + '">수정</button></span>'
-                   : '<button class="stp-a red" type="button" data-prep="' + t.num + '">준비하기</button>', g.prepDone);
+                   : '<button class="stp-a red" type="button" data-prep="' + t.num + '">준비하기</button>', g.prepDone, false, isFresh(t.num, 'prep'));
     } else if (lead === 0) {
       s3 = stepRow(3, '토론 준비', '', '<span class="stp-off">위에서 진행 주제를 고르면 열려요</span>', false, true);
     } else {
@@ -847,7 +909,7 @@
 
   function statusTable(w) {
     if (!w || (!w.t1 && !w.t2)) return '';
-    if (tp.recWeek !== tp.week) return '<section class="st"><p class="empty">현황을 불러오는 중…</p></section>';
+    if (tp.recWeek !== tp.week) return '<section class="st"><div class="sk sk-line w60"></div><div class="sk sk-block"></div></section>';
     var names = staff.slice().sort();
     function quizCell(x, n) {
       if (!n) return '<td class="c-na">—</td>';
@@ -868,7 +930,7 @@
         prepTd = ok ? '<td class="c-done">완료' + (p.thoughts != null ? '<small>내 생각 ' + p.thoughts + '개</small>' : '') +
                       '<small>' + fmtWhen(p.saved_at) + '</small></td>' : '<td class="c-wait">아직</td>';
       } else prepTd = '<td class="c-na">—</td>';
-      return '<tr' + (x === me ? ' class="me-row"' : '') + '><th>' + esc(x) + '</th>' + leadTd +
+      return '<tr' + (x === me ? ' class="me-row"' : '') + '><th>' + esc(x) + (tp.streaks ? streakChip(tp.streaks[x] || 0) : '') + '</th>' + leadTd +
              quizCell(x, w.t1) + quizCell(x, w.t2) + prepTd + '</tr>';
     }).join('');
     var sum = SLOTS.map(function (s) {
@@ -930,7 +992,7 @@
     el('quiz-wrap').hidden = false;
     el('qz-title').textContent = t.num + '. ' + t.title;
     el('qz-pdf').href = pdfUrl(t);
-    el('qz-body').innerHTML = '<p class="empty">문제를 불러오는 중…</p>';
+    el('qz-body').innerHTML = skel();
     el('qz-foot').hidden = true;
     var get = tp.quizCache[num] ? Promise.resolve(tp.quizCache[num])
       : call({ action: 'quiz', topic: num }).then(function (d) { return (tp.quizCache[num] = d.quiz); });
@@ -1004,12 +1066,15 @@
     var res = el('qz-res');
     res.hidden = false;
     res.className = 'qz-res ' + (passed ? 'is-pass' : 'is-fail');
-    res.textContent = passed
-      ? '숙지 완료 · 첫 시도 ' + qz.first + '/' + total
-      : right + '/' + total + ' · 틀린 ' + (total - right) + '개는 PDF를 다시 보고 골라주세요';
+    if (passed) {
+      res.innerHTML = CHECK + '<span><b>숙지 완료!</b><small>첫 시도 ' + qz.first + '/' + total + (qz.first === total ? ' · 한 번에 다 맞혔어요' : '') + '</small></span>';
+      tp.flash = { topic: qz.topic, kind: 'quiz', at: Date.now() };
+      setTimeout(function () { celebrate(res.querySelector('.ok-mark')); }, 250);
+    } else res.textContent = right + '/' + total + ' · 틀린 ' + (total - right) + '개는 PDF를 다시 보고 골라주세요';
     el('qz-go').textContent = '다시 채점하기';
     el('qz-go').hidden = passed;
     el('qz-next').hidden = !(passed && leadOf(me) === qz.topic);
+    if (passed) res.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'nearest' });
     if (!passed) {
       var firstWrong = el('qz-body').querySelector('.qz-hint');
       if (firstWrong) firstWrong.parentNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1025,7 +1090,6 @@
           saveCache(tp.recWeek);
         }
         renderTopic(); renderNudge();
-        if (passed) toast('숙지 완료로 기록했습니다');
       }).catch(function (e) { if (qz) qz.sending = false; showError(e); });
   });
 
@@ -1099,7 +1163,7 @@
     el('prep-wrap').hidden = false;
     el('pp-title').textContent = t.num + '. ' + t.title;
     el('pp-steps').innerHTML = '';
-    el('pp-body').innerHTML = '<p class="empty">질문을 불러오는 중…</p>';
+    el('pp-body').innerHTML = skel();
     el('pp-err').hidden = true;
     pp = null;
     var mine = progress(me, num).prepDone;
@@ -1262,22 +1326,22 @@
           .concat([{ name: me, topic: topic, count: 0, thoughts: sv.thoughts || all.length, saved_at: sv.saved_at }]);
         saveCache(week);
       }
+      tp.flash = { topic: topic, kind: 'prep', at: Date.now() };
       renderTopic(); renderNudge();
-      toast('토론 준비를 제출했습니다. 수업 때 이 진행 카드를 켜두세요');
-      openCard(topic);
+      openCard(topic, true);
     }).catch(function (e) { delete btn.dataset.busy; btn.textContent = '제출하기'; showError(e); });
   }
 
   /* ── 진행 카드: 수업 중에 폰으로 보는 화면 ──
      맨 위에 주제지의 쉬운 질문(가볍게 시작), 그 아래 메인 질문을 순서대로 — 내 생각을 쓴 질문은 내 답과 함께 */
   var cd = null;
-  function openCard(num) {
+  function openCard(num, fresh) {
     var t = topicOf(num);
     if (!t) return;
     el('prep-wrap').hidden = true; pp = null;
     el('card-wrap').hidden = false;
     el('cd-title').textContent = t.num + '. ' + t.title;
-    el('cd-body').innerHTML = '<p class="empty">불러오는 중…</p>';
+    el('cd-body').innerHTML = skel();
     var local = null;
     try { local = JSON.parse(localStorage.getItem(cardKey(num)) || 'null'); } catch (e) {}
     var get = local ? Promise.resolve(local)
@@ -1291,6 +1355,10 @@
       if (!Object.keys(mine).length) { el('cd-body').innerHTML = '<p class="empty">아직 준비한 내용이 없습니다.</p>'; return; }
       cd = { topic: num, qs: r[0] || [], mine: mine };
       renderCard();
+      if (fresh) {
+        el('cd-body').insertAdjacentHTML('afterbegin', '<div class="cd-done">' + CHECK + '<span><b>제출했어요</b><small>수업 때 이 카드를 켜두세요</small></span></div>');
+        setTimeout(function () { celebrate(el('cd-body').querySelector('.ok-mark')); }, 250);
+      }
     }).catch(function (e) { el('cd-body').innerHTML = '<p class="empty">불러오지 못했습니다.</p>'; showError(e); });
   }
   function renderCard() {
@@ -1319,7 +1387,7 @@
     el('card-wrap').hidden = true;
     el('pv-wrap').hidden = false;
     el('pv-title').textContent = t.num + '. ' + t.title;
-    el('pv-body').innerHTML = '<p class="empty">불러오는 중…</p>';
+    el('pv-body').innerHTML = skel();
     Promise.all([loadQuestions(num), call({ action: 'prepView', week: tp.week, topic: num, name: me })])
       .then(function (r) {
         var qs = r[0], preps = r[1].preps || [];
@@ -1449,7 +1517,11 @@
     var ta = el('pk-text'), txt = ta.value;
     function fallback() { ta.focus(); ta.select(); toast('선택해 뒀어요. 길게 눌러 복사하세요'); }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).then(function () { toast('복사했습니다. 단톡방에 붙여넣으세요'); }, fallback);
+      navigator.clipboard.writeText(txt).then(function () {
+        var b = el('pk-copy'), was = b.dataset.label || (b.dataset.label = b.textContent);
+        b.textContent = '복사됨 ✓ 단톡방에 붙여넣으세요'; b.classList.add('is-copied');
+        clearTimeout(b._t); b._t = setTimeout(function () { b.textContent = was; b.classList.remove('is-copied'); }, 2200);
+      }, fallback);
     } else fallback();
   });
 
@@ -1475,28 +1547,94 @@
     openForm(d);
   });
 
-  Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) {
-    n.addEventListener('click', function () {
-      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
-      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true; el('card-wrap').hidden = true;
-      sheetDate = null; qz = null; pp = null;
-    });
+  /* ───────── 창(아래에서 올라오는 시트) ─────────
+     닫는 길은 네 가지: 바깥 누르기 · Esc · 아래로 끌어내리기 · 폰의 뒤로가기 */
+  var MODALS = ['sheet-wrap', 'form-wrap', 'who-wrap', 'quiz-wrap', 'pick-wrap', 'prep-wrap', 'pv-wrap', 'card-wrap'];
+  function anyModal() { return MODALS.some(function (id) { return !el(id).hidden; }); }
+  function closeAll() {
+    MODALS.forEach(function (id) { el(id).hidden = true; });
+    sheetDate = null; qz = null; pp = null;
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (n) { n.addEventListener('click', closeAll); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
+
+  /* 뒤로가기: 창이 열리면 방문 기록을 하나 쌓고, 뒤로가기가 그걸 먹으면서 창을 닫는다 */
+  var popSkip = false;
+  var modalWatch = new MutationObserver(function () {
+    var open = anyModal(), mark = history.state && history.state.sheet;
+    if (open && !mark) history.pushState({ sheet: 1 }, '');
+    else if (!open && mark) { popSkip = true; history.back(); }
+    MODALS.forEach(function (id) { if (el(id).hidden) { var sh = el(id).querySelector('.sheet'); sh.style.transform = ''; sh.style.transition = ''; } });
   });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') {
-      el('sheet-wrap').hidden = true; el('form-wrap').hidden = true; el('who-wrap').hidden = true;
-      el('quiz-wrap').hidden = true; el('pick-wrap').hidden = true; el('prep-wrap').hidden = true; el('pv-wrap').hidden = true; el('card-wrap').hidden = true;
-      qz = null; pp = null;
-    }
+  MODALS.forEach(function (id) { modalWatch.observe(el(id), { attributes: true, attributeFilter: ['hidden'] }); });
+  window.addEventListener('popstate', function () {
+    if (popSkip) { popSkip = false; return; }
+    if (anyModal()) closeAll();
   });
 
+  /* 아래로 끌어내리기: 창 내용이 맨 위에 있을 때 아래로 끌면 따라 내려오고, 충분히 끌면 닫힌다 */
+  MODALS.forEach(function (id) {
+    var wrap = el(id), sh = wrap.querySelector('.sheet'), bg = wrap.querySelector('.modal-bg');
+    var y0 = null, dy = 0, t0 = 0, drag = false;
+    sh.addEventListener('touchstart', function (e) {
+      y0 = null;
+      if (e.touches.length !== 1 || innerWidth >= 560) return;
+      if (e.target.closest('textarea, input, select')) return;
+      if (sh.scrollTop > 0) return;
+      y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); drag = false;
+    }, { passive: true });
+    sh.addEventListener('touchmove', function (e) {
+      if (y0 === null) return;
+      var d = e.touches[0].clientY - y0;
+      if (!drag) {
+        if (d < -4 || sh.scrollTop > 0) { y0 = null; return; }   /* 위로 밀면 평소처럼 스크롤 */
+        if (d < 8) return;
+        drag = true; sh.style.transition = 'none';
+      }
+      dy = Math.max(0, d - 8);
+      sh.style.transform = 'translateY(' + dy + 'px)';
+      if (bg) bg.style.opacity = String(1 - Math.min(dy / 500, 0.5));
+      e.preventDefault();
+    }, { passive: false });
+    function end() {
+      if (y0 === null) return;
+      y0 = null;
+      if (!drag) return;
+      var fast = dy / Math.max(1, Date.now() - t0) > 0.7;
+      sh.style.transition = 'transform .2s ease';
+      if (bg) { bg.style.transition = 'opacity .2s'; bg.style.opacity = ''; }
+      if (dy > 120 || (fast && dy > 40)) {
+        sh.style.transform = 'translateY(105%)';
+        setTimeout(closeAll, 170);
+      } else sh.style.transform = '';
+    }
+    sh.addEventListener('touchend', end);
+    sh.addEventListener('touchcancel', end);
+  });
+
+  /* ───────── 탭 ───────── */
+  var TABS = ['cal', 'topic', 'mine'];
+  function curTab() { return TABS.filter(function (t) { return !el('tab-' + t).hidden; })[0] || 'cal'; }
+  function moveInk() {
+    var on = document.querySelector('.tab.is-on'), ink = document.querySelector('.tab-ink');
+    if (!on || !ink) return;
+    ink.style.width = on.offsetWidth + 'px';
+    ink.style.transform = 'translateX(' + on.offsetLeft + 'px)';
+  }
   function switchTab(on) {
+    var from = TABS.indexOf(curTab()), to = TABS.indexOf(on);
     Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (x) {
       x.classList.toggle('is-on', x.dataset.tab === on);
     });
     el('tab-cal').hidden = on !== 'cal';
     el('tab-topic').hidden = on !== 'topic';
     el('tab-mine').hidden = on !== 'mine';
+    moveInk();
+    if (from !== to && from !== -1) {
+      var pn = el('tab-' + on);
+      pn.classList.remove('slide-l', 'slide-r'); void pn.offsetWidth;
+      pn.classList.add(to > from ? 'slide-l' : 'slide-r');
+    }
     el('fab').style.display = on === 'cal' ? '' : 'none';
     if (on === 'mine') renderMine();
     if (on === 'topic') { if (tp.state === 'ok') { renderTopic(); loadStatus(); } else loadTopic(); }
@@ -1504,6 +1642,37 @@
   Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
     t.addEventListener('click', function () { switchTab(t.dataset.tab); });
   });
+  window.addEventListener('resize', moveInk);
+
+  /* 좌우로 밀어서 탭 넘기기. 달력 칸 위에서 밀면 달이 넘어간다.
+     옆으로 스크롤되는 표·입력칸 위에서는 건드리지 않는다 */
+  (function () {
+    var x0 = null, y0 = 0, t0 = 0, onCal = false;
+    var app = el('view-app');
+    app.addEventListener('touchstart', function (e) {
+      x0 = null;
+      if (e.touches.length !== 1 || anyModal()) return;
+      var tg = e.target;
+      if (tg.closest('input, textarea, select, .tbl-scroll, .tabs')) return;
+      for (var n = tg; n && n !== app; n = n.parentElement) {
+        if (n.scrollWidth > n.clientWidth + 2 && /(auto|scroll)/.test(getComputedStyle(n).overflowX)) return;
+      }
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now();
+      onCal = !!tg.closest('#cal');
+    }, { passive: true });
+    app.addEventListener('touchend', function (e) {
+      if (x0 === null) return;
+      var t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+      x0 = null;
+      if (Date.now() - t0 > 700 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+      if (onCal) { el(dx < 0 ? 'next-m' : 'prev-m').click(); return; }
+      var i = TABS.indexOf(curTab()) + (dx < 0 ? 1 : -1);
+      if (i >= 0 && i < TABS.length) switchTab(TABS[i]);
+    }, { passive: true });
+  })();
+  /* iOS 사파리는 이게 있어야 버튼 눌림(:active) 모양이 보인다 */
+  document.addEventListener('touchstart', function () {}, { passive: true });
+  el('toast').addEventListener('click', function () { el('toast').hidden = true; });
 
   function showError(e) {
     console.error(e);

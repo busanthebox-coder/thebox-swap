@@ -22,7 +22,7 @@ var STAFF_COLS = ['name', 'created_at'];
 var SWAP_COLS = ['id', 'date', 'requester', 'cover', 'time_note', 'reason', 'tasks', 'status', 'created_at', 'filled_at'];
 
 /* 이 스크립트의 버전. 앱은 이 숫자를 보고 새 기능을 켤지 정한다 — 한 곳에서만 올린다 */
-var API_V = 8;
+var API_V = 9;
 
 function doGet(e) { return handle(e); }
 function doPost(e) { return handle(e); }
@@ -576,9 +576,33 @@ function boot(req) {
     quiz[n] = quizOf(n);
     questions[n] = questionsOf(n);
   });
+  var allRecs = rowsOf(tabOf(SHEET_QREC, QREC_HEAD), QREC_KEYS).map(toRec);
   return { ok: true, v: API_V, week: week, topics: listTopics(), weeks: weeks,
-           records: quizStatus(week), preps: prepStatus(week), staff: listStaff(),
+           records: allRecs.filter(function (r) { return r.week === week; }),
+           streaks: streaksOf(week, weeks, allRecs), preps: prepStatus(week), staff: listStaff(),
            leads: listLeads(week), quiz: quiz, questions: questions, prepMin: PREP_MIN, thinkMin: THINK_MIN };
+}
+
+/**
+ * 연속 기록: 이 주부터 거꾸로, 두 주제 퀴즈를 모두 끝낸 주가 몇 주 이어지는지 이름별로 센다.
+ * 이 주를 아직 안 끝냈으면 지난주부터 센다 (주중에는 끊긴 게 아니다). 주제가 안 올라온 주는 건너뛴다.
+ */
+function streaksOf(week, weeks, recs) {
+  var pass = {}, names = {};
+  recs.forEach(function (r) {
+    names[r.name] = true;
+    if (r.passed) pass[r.week + '|' + r.topic + '|' + r.name] = true;
+  });
+  var ws = weeks.filter(function (w) { return w.week <= week && (w.t1 || w.t2); })
+    .sort(function (a, b) { return a.week < b.week ? 1 : -1; });
+  var out = {};
+  Object.keys(names).forEach(function (n) {
+    function full(w) { return [w.t1, w.t2].every(function (t) { return !t || pass[w.week + '|' + t + '|' + n]; }); }
+    var i = ws.length && ws[0].week === week && !full(ws[0]) ? 1 : 0, c = 0;
+    for (; i < ws.length && full(ws[i]); i++) c++;
+    if (c) out[n] = c;
+  });
+  return out;
 }
 
 /* ───────── 이번 주 내가 진행하는 주제 ─────────
