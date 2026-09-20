@@ -615,6 +615,7 @@
     var k = mondayKey(new Date());
     return key === k ? '이번 주' : key === addDays(k, 7) ? '다음 주' : key === addDays(k, -7) ? '지난주' : '';
   }
+  function weekWord() { return weekTag(tp.week) || '그 주'; }
   function topicOf(n) {
     n = +n;
     for (var i = 0; i < tp.topics.length; i++) if (tp.topics[i].num === n) return tp.topics[i];
@@ -840,7 +841,7 @@
     if (!w || (!w.t1 && !w.t2) || !me) return '';
     var st = weekSteps(w), k = st.filter(function (x) { return x.ok; }).length, all = k === st.length;
     var n = tp.streaks ? (tp.streaks[me] || 0) : 0;
-    return '<section class="wb' + (all ? ' is-all' : '') + '"><div class="wb-top"><b>' + (all ? '이번 주 할 일 끝' : '이번 주 내 할 일') + '</b>' +
+    return '<section class="wb' + (all ? ' is-all' : '') + '"><div class="wb-top"><b>' + weekWord() + (all ? ' 할 일 끝' : ' 내 할 일') + '</b>' +
       '<span class="wb-n num">' + k + ' / ' + st.length + '</span>' + streakChip(n, true) + '</div>' +
       '<div class="wb-bar">' + st.map(function (x) { return '<i class="' + (x.ok ? 'on' : '') + '"></i>'; }).join('') + '</div>' +
       '<div class="wb-l">' + st.map(function (x) { return '<span class="' + (x.ok ? 'on' : '') + '">' + x.l + '</span>'; }).join('') + '</div></section>';
@@ -849,14 +850,14 @@
   function leadPicker(w) {
     if (!w || (!w.t1 && !w.t2)) return '';
     var mine = leadOf(me);
-    return '<section class="lead"><p class="lead-t">이번 주 내가 진행하는 주제</p><div class="lead-pills">' +
+    return '<section class="lead"><p class="lead-t">' + weekWord() + ' 내가 진행하는 주제</p><div class="lead-pills">' +
       SLOTS.map(function (s) {
         var n = w[s.key];
         if (!n) return '';
         return '<button type="button" class="lead-pill' + (mine === n ? ' is-on' : '') + '" data-lead="' + n + '">' +
                s.label + ' · ' + s.days.replace(/ · /g, ' ') + '</button>';
       }).join('') +
-      '<button type="button" class="lead-pill' + (mine === -1 ? ' is-on' : '') + '" data-lead="-1">이번 주 진행 안 함</button></div>' +
+      '<button type="button" class="lead-pill' + (mine === -1 ? ' is-on' : '') + '" data-lead="-1">' + weekWord() + ' 진행 안 함</button></div>' +
       '<p class="lead-note">토론 준비는 진행하는 주제만 하면 돼요. 대타로 들어가게 되면 그 주제도 준비하면 됩니다.</p></section>';
   }
 
@@ -879,7 +880,7 @@
     if (!t) {
       return '<article class="tc tc-empty">' + head + '</div><p class="tc-none">' +
         (num ? num + '번 PDF를 찾지 못했습니다.'
-             : posted ? '이번 주는 ' + s.label + '가 없어요. ' + s.days + '은 읽을 것도 준비할 것도 없습니다.'
+             : posted ? weekWord() + '는 ' + s.label + '가 없어요. ' + s.days + '은 읽을 것도 준비할 것도 없습니다.'
                       : '아직 주제가 올라오지 않았어요.') + '</p></article>';
     }
     var g = progress(me, t.num), r = g.rec, lead = leadOf(me);
