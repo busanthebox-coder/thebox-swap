@@ -595,7 +595,6 @@
   var tp = { state: 'idle', err: '', topics: [], weeks: [], recs: [], preps: [], recWeek: null,
              week: null, moved: false, quizCache: {}, qnCache: {}, pending: null, v: 0,
              leads: [], prepMin: 0, streaks: null, flash: null };
-  function prepMax() { return tp.v >= 5 ? 99 : 2; }   /* 옛 시트 스크립트는 정확히 2개만 받는다 */
 
   function isAdmin() { return ADMINS.indexOf(me) !== -1; }
   function keyOf(d) { return ymd(d.getFullYear(), d.getMonth(), d.getDate()); }
@@ -653,13 +652,13 @@
     try { localStorage.setItem(leadKey(), String(num)); } catch (e) {}
     tp.leads = tp.leads.filter(function (l) { return l.name !== me; }).concat([{ name: me, topic: num }]);
     saveCache(tp.week); renderTopic(); renderNudge();
-    if (tp.v >= 6) call({ action: 'setLead', week: tp.week, name: me, topic: num }).catch(showError);
+    call({ action: 'setLead', week: tp.week, name: me, topic: num }).catch(showError);
   }
   /* 완료 = 퀴즈 통과 + (내가 진행하는 주제라면) 토론 준비 */
   function progress(name, topic) {
     var r = recOf(name, topic), p = prepOf(name, topic);
     var quiz = !!(r && r.passed);
-    var prep = !!(p && (p.thoughts != null && tp.v >= 7
+    var prep = !!(p && (p.thoughts != null
       ? p.thoughts >= (tp.thinkMin || 3)
       : p.count >= (tp.prepMin || 1)));
     var lead = leadOf(name) === +topic;
@@ -1274,7 +1273,6 @@
     Array.prototype.forEach.call(body.querySelectorAll('[data-tr]'), function (b) {
       b.addEventListener('click', function () {
         var n = b.parentNode.querySelector('textarea, input');
-        if (tp.v < 6) { toast('시트 스크립트를 새 버전으로 바꾸면 쓸 수 있어요'); return; }
         b.disabled = true; b.textContent = '바꾸는 중…';
         call({ action: 'translate', text: n.value }).then(function (d) {
           n.value = d.text || n.value; n.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1315,8 +1313,6 @@
     var btn = el('pp-go');
     var e = checkAll();
     if (e) return stopPrep(e);
-    /* v7 시트 스크립트는 이끌 질문이 없으면 받지 않는다 */
-    if (tp.v < 8) return stopPrep('시트 스크립트를 새 버전(v8)으로 바꿔야 제출돼요. 한남에게 알려주세요');
     var all = answered().map(function (q) { return { no: q.no, thought: D(q.no).thought.trim(), ask: '', follow: [] }; });
     if (btn.dataset.busy) return;
     btn.dataset.busy = '1'; btn.textContent = '제출하는 중…'; el('pp-err').hidden = true;
