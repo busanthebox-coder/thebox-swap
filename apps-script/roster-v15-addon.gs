@@ -63,7 +63,7 @@ function v15RosterCohort(ss, config,level) {
   if(!sh) throw new Error('운영 시트 없음: '+config.tab);
   var spec=level==='A'?config.a:config.b;
   var start=spec.firstRow,nameCol=spec.nameColumn;
-  var last=Math.min(sh.getLastRow(),start+70);
+  var last=Math.min(sh.getLastRow(),start+19); // Up to 20 numbered cohort positions; never read waitlist sections.
   if(last<start) return [];
   // Name; note: fixed weekday is exactly 7 columns after name.
   var vals=sh.getRange(start,nameCol,last-start+1,9).getDisplayValues();
