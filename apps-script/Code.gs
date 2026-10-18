@@ -39,6 +39,7 @@ function handle(e) {
 
   try {
     switch (req.action) {
+      case 'secureRoster': return json(secureRosterV15(req));
       case 'staff':    return json({ ok: true, staff: listStaff() });
       case 'addStaff': return json({ ok: true, staff: addStaff(req.name) });
       case 'removeStaff': return json(removeStaff(req.name));
