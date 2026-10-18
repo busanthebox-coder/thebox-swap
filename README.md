@@ -86,3 +86,11 @@ apps-script/Code.gs     구글 시트 백엔드
 - 취소한 요청도 시트에는 `canceled` 로 남습니다. 기록이 사라지지 않습니다.
 - **웹 앱 URL이 이 공개 레포의 `config.js` 에 들어갑니다.** 레포를 보는 사람은 누구나 그 주소를 알 수 있습니다.
 - 휴대폰에서 `홈 화면에 추가`하면 앱처럼 열립니다.
+
+## v15 테스트 (기존 앱과 별개)
+
+- [리더 읽기 전용 테스트](https://busanthebox-coder.github.io/thebox-swap/leader/)
+- [원어민 읽기 전용 테스트](https://busanthebox-coder.github.io/thebox-swap/native/)
+- 실시간 조회 대상: 기존 Apps Script의 주간 주제/대타 기록. 기존 대타판의 입력·확정 기능은 그대로 유지.
+- 학생 고정 요일/명단은 리더별 **개인 코드 기반** `secureRoster` API를 준비했지만, 운영 Apps Script의 새 버전 배포·개인 코드 발급 전에는 조회되지 않습니다. [설치 안내](apps-script/ROSTER_V15_SETUP.md)
+- 이 테스트 경로의 GitHub HTML에는 학생 명단을 포함하지 않습니다. 로컬 v15 샘플(학생 이름 포함)을 공개 Pages에 올리지 마세요.
